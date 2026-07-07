@@ -72,7 +72,7 @@ describe('RaptorQ WASM loader', () => {
     }
   });
 
-  it.runIf(process.env.QR_STREAM_TEST_RAPTORQ_WASM === '1')(
+  it(
     'should round-trip through generated WASM artifacts',
     async () => {
       const original = new TextEncoder().encode('raptorq wasm roundtrip');

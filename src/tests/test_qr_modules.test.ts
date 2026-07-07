@@ -1,6 +1,17 @@
-import { generateQRMatrix, getMaxByteCapacity, getMinVersion } from '../core/qr/qr_encode.ts';
+import {
+  generateQRMatrix,
+  getMaxByteCapacity,
+  getMaxZXingWriterByteCapacity,
+  getMinVersion,
+} from '../core/qr/qr_encode.ts';
 import { rasterizeQR, rasterizeToGrayscale, getRasterDimensions } from '../core/qr/frame_raster.ts';
 import { decodeQRFromBuffer, decodeQRCodesFromCanvas } from '../core/qr/qr_decode.ts';
+import {
+  QR_ENCODERS,
+  encodeQRCodeMatrix,
+  renderQRCodeImageData,
+} from '../core/qr/qr_encoder_browser.ts';
+import { renderQRCodeImageDataWithZXing } from '../core/qr/qr_write_wasm.ts';
 import { createQRGif, estimateGifSize } from '../core/gif/gif_render.ts';
 import { describe, it, expect } from 'vitest';
 
@@ -9,6 +20,17 @@ describe('QR encode', () => {
     expect(getMaxByteCapacity(31, 'Q')).toBeGreaterThan(1000);
     expect(getMaxByteCapacity(35, 'M')).toBeGreaterThan(1000);
     expect(getMaxByteCapacity(40, 'M')).toBeGreaterThan(2000);
+  });
+
+  it('should account for ZXing writer binary ECI overhead in transfer profiles', async () => {
+    const { createQRTransferProfile, getQRTransferProfile } = await import('@/core/protocol/profiles');
+
+    expect(getMaxByteCapacity(20, 'L')).toBe(858);
+    expect(getMaxZXingWriterByteCapacity(20, 'L')).toBe(856);
+    expect(getQRTransferProfile('v20-l').maxPacketSize).toBe(856);
+    expect(getQRTransferProfile('v20-l').maxPayloadSize).toBe(844);
+    expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPacketSize).toBe(858);
+    expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPayloadSize).toBe(846);
   });
 
   it('should expose low-ECC transfer profiles with more payload room', async () => {
@@ -30,6 +52,21 @@ describe('QR encode', () => {
     const matrix = generateQRMatrix(data, 1, 'L');
     expect(matrix.length).toBe(21);
     expect(matrix[0]!.length).toBe(21);
+  });
+
+  it('should expose an encoder abstraction for JS QR and ZXing WASM', async () => {
+    const payload = new TextEncoder().encode('encoder facade');
+
+    for (const encoder of QR_ENCODERS) {
+      const matrix = await encodeQRCodeMatrix(payload, 10, 'L', encoder);
+      const image = await renderQRCodeImageData(payload, 10, 'L', 3, encoder);
+      const decoded = await decodeQRCodesFromCanvas(image, 1);
+
+      expect(matrix.length).toBe(57);
+      expect(matrix[0]!.length).toBe(57);
+      expect(decoded).toHaveLength(1);
+      expect(new TextDecoder().decode(decoded[0]!.bytes)).toBe('encoder facade');
+    }
   });
 });
 
@@ -88,6 +125,37 @@ describe('Frame raster', () => {
       .sort();
 
     expect(texts).toEqual([...payloads].sort());
+  });
+
+  it('should round-trip QR images written by ZXing WASM', async () => {
+    const payload = new Uint8Array([0, 1, 2, 3, 4, 5, 127, 128, 255]);
+    const image = await renderQRCodeImageDataWithZXing(payload, 10, 'L', 4);
+    const decoded = await decodeQRCodesFromCanvas(image, 1);
+
+    expect(image.width).toBe((10 * 4 + 17 + 8) * 4);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.version).toBe(10);
+    expect(decoded[0]!.bytes).toEqual(payload);
+  });
+
+  it('should write and read a full V20-L transfer packet with ZXing WASM', async () => {
+    const { getQRTransferProfile } = await import('@/core/protocol/profiles');
+
+    const profile = getQRTransferProfile('v20-l');
+    const packet = new Uint8Array(profile.maxPacketSize);
+    for (let i = 0; i < packet.length; i++) packet[i] = i & 0xff;
+
+    const image = await renderQRCodeImageDataWithZXing(
+      packet,
+      profile.version,
+      profile.eccLevel,
+      2,
+    );
+    const decoded = await decodeQRCodesFromCanvas(image, 1);
+
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.version).toBe(20);
+    expect(decoded[0]!.bytes).toEqual(packet);
   });
 });
 

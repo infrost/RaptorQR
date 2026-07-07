@@ -42,6 +42,21 @@ const zxingReaderWasmPath = join(
   'reader',
   'zxing_reader.wasm',
 );
+const zxingWriterWasmPath = join(
+  process.cwd(),
+  'node_modules',
+  'zxing-wasm',
+  'dist',
+  'writer',
+  'zxing_writer.wasm',
+);
+const raptorqWasmPath = join(
+  process.cwd(),
+  'src',
+  'raptorq',
+  'wasm',
+  'qrstream_raptorq_wasm_bg.wasm',
+);
 
 // happy-dom's Response is not accepted by Node's instantiateStreaming; tests can
 // use the same local wasm bytes through the ArrayBuffer fallback.
@@ -57,6 +72,24 @@ globalThis.fetch = async (input, init) => {
 
   if (url.includes('zxing_reader.wasm')) {
     const bytes = await readFile(zxingReaderWasmPath);
+    const body = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return new Response(body, {
+      headers: { 'Content-Type': 'application/wasm' },
+      status: 200,
+    });
+  }
+
+  if (url.includes('zxing_writer.wasm')) {
+    const bytes = await readFile(zxingWriterWasmPath);
+    const body = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return new Response(body, {
+      headers: { 'Content-Type': 'application/wasm' },
+      status: 200,
+    });
+  }
+
+  if (url.includes('qrstream_raptorq_wasm_bg.wasm')) {
+    const bytes = await readFile(raptorqWasmPath);
     const body = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     return new Response(body, {
       headers: { 'Content-Type': 'application/wasm' },

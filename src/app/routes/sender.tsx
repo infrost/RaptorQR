@@ -2,9 +2,14 @@
  * Sender page — text/file input, live QR playback, and GIF export.
  */
 import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
-import { generateQRMatrix } from '@/core/qr/qr_encode';
 import type { EccLevel } from '@/core/qr/qr_encode';
-import { rasterizeQR } from '@/core/qr/frame_raster';
+import {
+  DEFAULT_QR_ENCODER,
+  QR_ENCODERS,
+  formatQREncoder,
+  normalizeQREncoder,
+  type QREncoder,
+} from '@/core/qr/qr_encoder_browser';
 import {
   DEFAULT_QR_ECC_LEVEL,
   DEFAULT_QR_VERSION,
@@ -54,16 +59,27 @@ interface LiveTransfer {
   rows: number;
   version: number;
   eccLevel: EccLevel;
+  qrEncoder: QREncoder;
   symbolSize: number;
   scale: number;
   displayFrameCount: number;
   parallelCount: ParallelQRCount;
 }
 
+interface RenderedTile {
+  source: CanvasImageSource;
+  close?: () => void;
+}
+
 interface FrameCache {
-  frames: Map<number, ImageData>;
+  frames: Map<number, RenderedTile>;
   maxEntries: number;
 }
+
+type RenderWorkerMessage =
+  | { type: 'tile'; requestId: number; packetIndex: number; imageData: ImageData }
+  | { type: 'done'; requestId: number }
+  | { type: 'error'; requestId: number; packetIndex?: number; message: string };
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -77,7 +93,9 @@ const PARALLEL_QR_COUNTS: ParallelQRCount[] = [1, 2, 4];
 const FEC_CODEC_OPTIONS: FecCodec[] = ['wasm-raptorq', 'js-rlnc'];
 const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
-const FRAME_CACHE_LIMIT = 120;
+const FRAME_CACHE_LIMIT = 240;
+const PREFETCH_DISPLAY_FRAMES = 120;
+const QR_RENDER_BATCH_LIMIT = 96;
 
 const S = {
   section: {
@@ -237,6 +255,7 @@ export function SenderPage() {
   const [status, setStatus] = useState('');
   const [qrVersion, setQrVersion] = useState<QRVersionOption>(DEFAULT_QR_VERSION);
   const [eccLevel, setEccLevel] = useState<EccLevel>(DEFAULT_QR_ECC_LEVEL);
+  const [qrEncoder, setQrEncoder] = useState<QREncoder>(DEFAULT_QR_ENCODER);
   const [fecCodec, setFecCodec] = useState<FecCodec>(DEFAULT_FEC_CODEC);
   const [raptorqRepairPercent, setRaptorqRepairPercent] = useState(DEFAULT_RAPTORQ_REPAIR_PERCENT);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
@@ -248,6 +267,7 @@ export function SenderPage() {
     preprocessedSize: number;
     frameCount: number;
     totalGenerations: number;
+    qrEncoder: QREncoder;
     fecCodec: FecCodec;
     raptorqRepairPercent: number;
   } | null>(null);
@@ -259,12 +279,16 @@ export function SenderPage() {
   const liveTransferRef = useRef<LiveTransfer | null>(null);
   const encodeWorkerRef = useRef<Worker | null>(null);
   const gifWorkerRef = useRef<Worker | null>(null);
+  const qrRenderWorkerRef = useRef<Worker | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const liveFrameIndexRef = useRef(0);
   const frameRateFpsRef = useRef(DEFAULT_FRAME_RATE_FPS);
   const frameCacheRef = useRef<FrameCache>(createFrameCache());
+  const requestedPacketImagesRef = useRef<Set<number>>(new Set());
+  const playbackStartedRef = useRef(false);
   const runIdRef = useRef(0);
-  const qrProfile = createQRTransferProfile(qrVersion, eccLevel);
+  const qrRenderRequestIdRef = useRef(0);
+  const qrProfile = createQRTransferProfile(qrVersion, eccLevel, qrEncoder);
   const frameDelayMs = frameRateToDelayMs(frameRateFps);
 
   const clearPlaybackTimer = useCallback(() => {
@@ -284,6 +308,61 @@ export function SenderPage() {
     gifWorkerRef.current = null;
   }, []);
 
+  const terminateQRRenderWorker = useCallback(() => {
+    qrRenderRequestIdRef.current++;
+    qrRenderWorkerRef.current?.terminate();
+    qrRenderWorkerRef.current = null;
+  }, []);
+
+  const requestRenderWindow = useCallback((
+    transfer: LiveTransfer,
+    startFrameIndex: number,
+  ) => {
+    const worker = qrRenderWorkerRef.current;
+    if (!worker) return;
+
+    const missingPacketIndexes: number[] = [];
+    const endFrameIndex = startFrameIndex + PREFETCH_DISPLAY_FRAMES;
+
+    for (let frameIndex = startFrameIndex; frameIndex < endFrameIndex; frameIndex++) {
+      const normalizedFrameIndex = frameIndex % transfer.displayFrameCount;
+      for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
+        const packetIndex = getPacketIndexForDisplayFrame(
+          transfer,
+          normalizedFrameIndex,
+          tileIndex,
+        );
+        if (packetIndex === null) continue;
+        if (frameCacheRef.current.frames.has(packetIndex)) continue;
+        if (requestedPacketImagesRef.current.has(packetIndex)) continue;
+
+        requestedPacketImagesRef.current.add(packetIndex);
+        missingPacketIndexes.push(packetIndex);
+        if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT) {
+          break;
+        }
+      }
+      if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT) {
+        break;
+      }
+    }
+
+    if (missingPacketIndexes.length === 0) return;
+
+    const requestId = qrRenderRequestIdRef.current;
+    worker.postMessage({
+      type: 'renderTiles',
+      requestId,
+      qrVersion: transfer.version,
+      eccLevel: transfer.eccLevel,
+      qrEncoder: transfer.qrEncoder,
+      tiles: missingPacketIndexes.map((packetIndex) => ({
+        packetIndex,
+        packet: transfer.packets[packetIndex]!,
+      })),
+    });
+  }, []);
+
   const scheduleNextLiveFrame = useCallback(() => {
     clearPlaybackTimer();
     const delayMs = frameRateToDelayMs(frameRateFpsRef.current);
@@ -295,7 +374,14 @@ export function SenderPage() {
 
       try {
         const frameIndex = liveFrameIndexRef.current % transfer.displayFrameCount;
+        requestRenderWindow(transfer, frameIndex);
+        if (!isDisplayFrameReady(transfer, frameIndex, frameCacheRef.current)) {
+          scheduleNextLiveFrame();
+          return;
+        }
+
         drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+        requestRenderWindow(transfer, frameIndex + 1);
         liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
         scheduleNextLiveFrame();
       } catch (err: any) {
@@ -303,7 +389,7 @@ export function SenderPage() {
         setError(err.message ?? String(err));
       }
     }, delayMs);
-  }, [clearPlaybackTimer]);
+  }, [clearPlaybackTimer, requestRenderWindow]);
 
   const startLivePlayback = useCallback((resetIndex: boolean) => {
     clearPlaybackTimer();
@@ -317,10 +403,17 @@ export function SenderPage() {
     }
 
     const frameIndex = liveFrameIndexRef.current % transfer.displayFrameCount;
+    requestRenderWindow(transfer, frameIndex);
+    if (!isDisplayFrameReady(transfer, frameIndex, frameCacheRef.current)) {
+      scheduleNextLiveFrame();
+      return;
+    }
+
     drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+    requestRenderWindow(transfer, frameIndex + 1);
     liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
     scheduleNextLiveFrame();
-  }, [clearPlaybackTimer, scheduleNextLiveFrame]);
+  }, [clearPlaybackTimer, requestRenderWindow, scheduleNextLiveFrame]);
 
   useEffect(() => {
     frameRateFpsRef.current = frameRateFps;
@@ -336,26 +429,100 @@ export function SenderPage() {
 
   useEffect(() => {
     liveTransferRef.current = liveTransfer;
-    frameCacheRef.current.frames.clear();
+    clearFrameCache(frameCacheRef.current);
+    requestedPacketImagesRef.current.clear();
+    playbackStartedRef.current = false;
+    clearPlaybackTimer();
+    terminateQRRenderWorker();
 
-    if (liveTransfer) {
-      startLivePlayback(true);
-    } else {
-      clearPlaybackTimer();
+    if (!liveTransfer) {
+      return clearPlaybackTimer;
     }
 
-    return clearPlaybackTimer;
-  }, [liveTransfer, clearPlaybackTimer, startLivePlayback]);
+    const requestId = ++qrRenderRequestIdRef.current;
+    const worker = new Worker(
+      new URL('@/workers/qr_render.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    qrRenderWorkerRef.current = worker;
+    setStatus('Rendering first QR frame…');
+
+    worker.onmessage = (e: MessageEvent<RenderWorkerMessage>) => {
+      const msg = e.data;
+      if (msg.requestId !== qrRenderRequestIdRef.current) return;
+
+      if (msg.type === 'tile') {
+        void (async () => {
+          try {
+            const renderedTile = await prepareRenderedTile(msg.imageData);
+            if (msg.requestId !== qrRenderRequestIdRef.current) {
+              closeRenderedTile(renderedTile);
+              return;
+            }
+
+            requestedPacketImagesRef.current.delete(msg.packetIndex);
+            cacheRenderedTile(frameCacheRef.current, msg.packetIndex, renderedTile);
+            trimFrameCache(frameCacheRef.current);
+
+            if (!playbackStartedRef.current && isDisplayFrameReady(liveTransfer, 0, frameCacheRef.current)) {
+              playbackStartedRef.current = true;
+              setStatus(
+                `Live QR running (${liveTransfer.packets.length} packets, ` +
+                `${liveTransfer.parallelCount} per tick).`,
+              );
+              startLivePlayback(true);
+            }
+          } catch (err: any) {
+            requestedPacketImagesRef.current.delete(msg.packetIndex);
+            setError(err.message ?? String(err));
+          }
+        })();
+        return;
+      }
+
+      if (msg.type === 'error') {
+        requestedPacketImagesRef.current.delete(msg.packetIndex ?? -1);
+        setError(msg.message);
+      }
+    };
+
+    worker.onerror = (err) => {
+      setError(err.message || 'QR render worker failed.');
+    };
+
+    requestRenderWindow(liveTransfer, 0);
+
+    return () => {
+      qrRenderRequestIdRef.current++;
+      clearPlaybackTimer();
+      if (qrRenderWorkerRef.current === worker) {
+        qrRenderWorkerRef.current = null;
+      }
+      worker.terminate();
+      requestedPacketImagesRef.current.clear();
+      playbackStartedRef.current = false;
+      clearFrameCache(frameCacheRef.current);
+    };
+  }, [
+    liveTransfer,
+    clearPlaybackTimer,
+    requestRenderWindow,
+    startLivePlayback,
+    terminateQRRenderWorker,
+  ]);
 
   /** Wipe all output state and stop any live playback loop. */
   const resetOutput = useCallback(() => {
     runIdRef.current++;
     terminateEncodeWorker();
     terminateGifWorker();
+    terminateQRRenderWorker();
     clearPlaybackTimer();
     liveTransferRef.current = null;
     liveFrameIndexRef.current = 0;
-    frameCacheRef.current.frames.clear();
+    clearFrameCache(frameCacheRef.current);
+    requestedPacketImagesRef.current.clear();
+    playbackStartedRef.current = false;
     setLiveTransfer(null);
     setGifResult(null);
     setStats(null);
@@ -363,7 +530,7 @@ export function SenderPage() {
     setPreparingGif(false);
     setError('');
     setStatus('');
-  }, [clearPlaybackTimer, terminateEncodeWorker, terminateGifWorker]);
+  }, [clearPlaybackTimer, terminateEncodeWorker, terminateGifWorker, terminateQRRenderWorker]);
 
   const handleStopTransfer = useCallback(() => {
     resetOutput();
@@ -396,6 +563,11 @@ export function SenderPage() {
 
   const handleEccLevelChange = useCallback((value: string) => {
     setEccLevel(normalizeEccLevel(value));
+    resetOutput();
+  }, [resetOutput]);
+
+  const handleQREncoderChange = useCallback((value: string) => {
+    setQrEncoder(normalizeQREncoder(value));
     resetOutput();
   }, [resetOutput]);
 
@@ -443,7 +615,7 @@ export function SenderPage() {
     }
 
     const compress = data.byteLength > 64;
-    const selectedQRProfile = createQRTransferProfile(qrVersion, eccLevel);
+    const selectedQRProfile = createQRTransferProfile(qrVersion, eccLevel, qrEncoder);
 
     setEncodingLive(true);
     setStatus('Encoding live QR…');
@@ -495,18 +667,19 @@ export function SenderPage() {
         preprocessedSize: encoded.stats.preprocessedSize,
         frameCount: encoded.stats.frameCount,
         totalGenerations: encoded.totalGenerations,
+        qrEncoder,
         fecCodec,
         raptorqRepairPercent,
       });
       const nextLiveTransfer = createLiveTransfer(
         encoded.packets,
         selectedQRProfile,
+        qrEncoder,
         parallelQRCount,
       );
       setLiveTransfer(nextLiveTransfer);
       setStatus(
-        `Live QR running (${encoded.stats.frameCount} packets, ` +
-        `${nextLiveTransfer.parallelCount} per tick).`,
+        `Encoded ${encoded.stats.frameCount} packets. Rendering first QR frame…`,
       );
     } catch (err: any) {
       if (runId === runIdRef.current) {
@@ -523,7 +696,7 @@ export function SenderPage() {
         setEncodingLive(false);
       }
     }
-  }, [mode, text, file, resetOutput, qrVersion, eccLevel, fecCodec, raptorqRepairPercent, parallelQRCount]);
+  }, [mode, text, file, resetOutput, qrVersion, eccLevel, qrEncoder, fecCodec, raptorqRepairPercent, parallelQRCount]);
 
   const handlePrepareGif = useCallback(async () => {
     const transfer = liveTransferRef.current;
@@ -575,6 +748,7 @@ export function SenderPage() {
             frameDelayMs: outputFrameDelayMs,
             qrVersion: transfer.version,
             eccLevel: transfer.eccLevel,
+            qrEncoder: transfer.qrEncoder,
             parallelCount: transfer.parallelCount,
           },
         );
@@ -635,6 +809,12 @@ export function SenderPage() {
 
   return (
     <div>
+      <style>{`
+        .qr-live-canvas {
+          image-rendering: -moz-crisp-edges;
+          image-rendering: pixelated;
+        }
+      `}</style>
       {/* ── Input mode toggle ───────────────────────────────────────────────── */}
       <div style={S.section}>
         <div style={S.row}>
@@ -673,7 +853,7 @@ export function SenderPage() {
             onChange={(e) => handleQRVersionChange((e.target as HTMLSelectElement).value)}
           >
             {QR_VERSION_OPTIONS.map((version) => {
-              const profile = createQRTransferProfile(version, eccLevel);
+              const profile = createQRTransferProfile(version, eccLevel, qrEncoder);
               return (
                 <option key={version} value={version}>
                   V{version} · {profile.maxPayloadSize} B/frame
@@ -694,13 +874,31 @@ export function SenderPage() {
             onChange={(e) => handleEccLevelChange((e.target as HTMLSelectElement).value)}
           >
             {ECC_LEVEL_OPTIONS.map((level) => {
-              const profile = createQRTransferProfile(qrVersion, level);
+              const profile = createQRTransferProfile(qrVersion, level, qrEncoder);
               return (
                 <option key={level} value={level}>
                   {formatEccLevel(level)} · {profile.maxPayloadSize} B/frame
                 </option>
               );
             })}
+          </select>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={S.label}>QR encoder</span>
+            <span style={S.infoValue}>{formatQREncoder(qrEncoder)}</span>
+          </div>
+          <select
+            value={qrEncoder}
+            style={S.select}
+            disabled={encodingLive}
+            onChange={(e) => handleQREncoderChange((e.target as HTMLSelectElement).value)}
+          >
+            {QR_ENCODERS.map((encoder) => (
+              <option key={encoder} value={encoder}>
+                {formatQREncoder(encoder)}
+              </option>
+            ))}
           </select>
         </div>
         <div style={{ marginBottom: 16 }}>
@@ -811,6 +1009,7 @@ export function SenderPage() {
           <div style={S.label}>Live QR Transfer</div>
           <div ref={qrStageRef} style={S.qrStage(fullscreenActive)}>
             <canvas
+              className="qr-live-canvas"
               ref={canvasRef}
               width={liveTransfer.width}
               height={liveTransfer.height}
@@ -859,6 +1058,8 @@ export function SenderPage() {
             <span style={S.infoValue}>{formatBytes(stats.preprocessedSize)}</span>
             <span style={S.infoLabel}>QR size</span>
             <span style={S.infoValue}>{liveTransfer ? `V${liveTransfer.version}-${liveTransfer.eccLevel}` : qrProfile.label}</span>
+            <span style={S.infoLabel}>QR encoder</span>
+            <span style={S.infoValue}>{formatQREncoder(stats.qrEncoder)}</span>
             <span style={S.infoLabel}>Symbol payload</span>
             <span style={S.infoValue}>{liveTransfer ? `${liveTransfer.symbolSize} B/frame` : `${qrProfile.maxPayloadSize} B/frame`}</span>
             <span style={S.infoLabel}>FEC codec</span>
@@ -943,9 +1144,51 @@ function createFrameCache(): FrameCache {
   return { frames: new Map(), maxEntries: FRAME_CACHE_LIMIT };
 }
 
+async function prepareRenderedTile(imageData: ImageData): Promise<RenderedTile> {
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(imageData);
+    return {
+      source: bitmap,
+      close: () => bitmap.close(),
+    };
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas 2D context is unavailable for QR tile cache.');
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return { source: canvas };
+}
+
+function cacheRenderedTile(
+  cache: FrameCache,
+  packetIndex: number,
+  tile: RenderedTile,
+): void {
+  const previous = cache.frames.get(packetIndex);
+  if (previous) closeRenderedTile(previous);
+  cache.frames.set(packetIndex, tile);
+}
+
+function closeRenderedTile(tile: RenderedTile): void {
+  tile.close?.();
+}
+
+function clearFrameCache(cache: FrameCache): void {
+  for (const tile of cache.frames.values()) {
+    closeRenderedTile(tile);
+  }
+  cache.frames.clear();
+}
+
 function createLiveTransfer(
   packets: Uint8Array[],
   profile: QRTransferProfile,
+  qrEncoder: QREncoder,
   parallelCount: ParallelQRCount,
 ): LiveTransfer {
   if (packets.length === 0) {
@@ -968,6 +1211,7 @@ function createLiveTransfer(
     rows: layout.rows,
     version: profile.version,
     eccLevel: profile.eccLevel,
+    qrEncoder,
     symbolSize: profile.maxPayloadSize,
     scale,
     displayFrameCount: stripedFrameCount(packets.length, parallelCount),
@@ -994,39 +1238,36 @@ function drawLiveFrame(
   for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
     const packetIndex = getPacketIndexForDisplayFrame(transfer, frameIndex, tileIndex);
     if (packetIndex === null) continue;
-    const image = getLivePacketImage(transfer, packetIndex, cache);
+    const image = cache.frames.get(packetIndex);
+    if (!image) continue;
     const x = (tileIndex % transfer.columns) * transfer.tileWidth;
     const y = Math.floor(tileIndex / transfer.columns) * transfer.tileHeight;
-    ctx.putImageData(image, x, y);
+    ctx.drawImage(image.source, x, y, transfer.tileWidth, transfer.tileHeight);
   }
 }
 
-function getLivePacketImage(
+function isDisplayFrameReady(
   transfer: LiveTransfer,
-  packetIndex: number,
+  frameIndex: number,
   cache: FrameCache,
-): ImageData {
-  const cacheKey = packetIndex % transfer.packets.length;
-  const cached = cache.frames.get(cacheKey);
-  if (cached) return cached;
-
-  const packet = transfer.packets[cacheKey];
-  if (!packet) {
-    throw new Error(`Missing QR packet at frame ${cacheKey}.`);
-  }
-
-  const matrix = generateQRMatrix(packet, transfer.version, transfer.eccLevel);
-  const image = rasterizeQR(matrix, transfer.scale);
-  cache.frames.set(cacheKey, image);
-
-  if (cache.frames.size > cache.maxEntries) {
-    const oldestKey = cache.frames.keys().next().value;
-    if (oldestKey !== undefined) {
-      cache.frames.delete(oldestKey);
+): boolean {
+  for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
+    const packetIndex = getPacketIndexForDisplayFrame(transfer, frameIndex, tileIndex);
+    if (packetIndex !== null && !cache.frames.has(packetIndex)) {
+      return false;
     }
   }
+  return true;
+}
 
-  return image;
+function trimFrameCache(cache: FrameCache): void {
+  while (cache.frames.size > cache.maxEntries) {
+    const oldestKey = cache.frames.keys().next().value;
+    if (oldestKey === undefined) return;
+    const oldestTile = cache.frames.get(oldestKey);
+    if (oldestTile) closeRenderedTile(oldestTile);
+    cache.frames.delete(oldestKey);
+  }
 }
 
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {

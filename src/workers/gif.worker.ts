@@ -1,13 +1,16 @@
 /**
- * GIF generation worker — receives packets, generates QR matrices,
- * rasterizes them, and creates an animated GIF.
+ * GIF generation worker — receives packets, renders QR frames with the
+ * selected QR encoder, and creates an animated GIF.
  *
  * @module
  */
 
-import { generateQRMatrix } from '@/core/qr/qr_encode';
 import type { EccLevel } from '@/core/qr/qr_encode';
-import { rasterizeQR } from '@/core/qr/frame_raster';
+import {
+  normalizeQREncoder,
+  renderQRCodeImageData,
+  type QREncoder,
+} from '@/core/qr/qr_encoder_browser';
 import { createQRGif } from '@/core/gif/gif_render';
 import { QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@/core/protocol/constants';
 import {
@@ -24,6 +27,7 @@ interface GenerateInput {
   frameDelayMs?: number;
   qrVersion?: number;
   eccLevel?: EccLevel;
+  qrEncoder?: QREncoder;
   parallelCount?: number;
 }
 
@@ -46,19 +50,22 @@ self.onmessage = (e: MessageEvent<GenerateInput>) => {
   const msg = e.data;
   if (msg.type !== 'generate') return;
 
-  try {
-    const result = handleGenerate(msg);
-    self.postMessage(result, [result.gifData]);
-  } catch (err: any) {
-    self.postMessage({ type: 'error', message: err.message ?? String(err) } satisfies ErrorOutput);
-  }
+  void (async () => {
+    try {
+      const result = await handleGenerate(msg);
+      self.postMessage(result, [result.gifData]);
+    } catch (err: any) {
+      self.postMessage({ type: 'error', message: err.message ?? String(err) } satisfies ErrorOutput);
+    }
+  })();
 };
 
-function handleGenerate(input: GenerateInput): GifOutput {
+async function handleGenerate(input: GenerateInput): Promise<GifOutput> {
   const { packets } = input;
   const frameDelayMs = normalizeFrameDelayMs(input.frameDelayMs);
   const qrVersion = normalizeQRVersion(input.qrVersion);
   const eccLevel = normalizeEccLevel(input.eccLevel);
+  const qrEncoder = normalizeQREncoder(input.qrEncoder);
   const parallelCount = normalizeParallelQRCount(input.parallelCount);
 
   const moduleCount = qrVersion * 4 + 17;
@@ -84,8 +91,13 @@ function handleGenerate(input: GenerateInput): GifOutput {
     for (let tileIndex = 0; tileIndex < parallelCount; tileIndex++) {
       const packetIndex = stripedPacketIndex(packets.length, parallelCount, frameIndex, tileIndex);
       if (packetIndex === null) continue;
-      const matrix = generateQRMatrix(packets[packetIndex]!, qrVersion, eccLevel);
-      const imageData = rasterizeQR(matrix, scale);
+      const imageData = await renderQRCodeImageData(
+        packets[packetIndex]!,
+        qrVersion,
+        eccLevel,
+        scale,
+        qrEncoder,
+      );
       const x = (tileIndex % layout.columns) * tileSize;
       const y = Math.floor(tileIndex / layout.columns) * tileSize;
       blitImageData(composite, width, imageData.data, imageData.width, imageData.height, x, y);

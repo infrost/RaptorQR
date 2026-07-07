@@ -109,6 +109,7 @@ const RS_BLOCK_TABLE: number[][] = [
 // ---------------------------------------------------------------------------
 
 const ECC_INDEX: Record<EccLevel, number> = { L: 0, M: 1, Q: 2, H: 3 };
+const ZXING_UINT8_ECI_OVERHEAD_BITS = 20;
 
 /**
  * Returns the maximum number of data bytes that can be stored in a QR code
@@ -118,23 +119,23 @@ const ECC_INDEX: Record<EccLevel, number> = { L: 0, M: 1, Q: 2, H: 3 };
  * Overhead = 4 bits (mode indicator) + character-count bits (8 for v1-9, 16 for v10-40).
  */
 export function getMaxByteCapacity(version: number, eccLevel: EccLevel): number {
-  const idx = (version - 1) * 4 + ECC_INDEX[eccLevel];
-  const entry = RS_BLOCK_TABLE[idx];
+  return getMaxByteCapacityWithExtraOverhead(version, eccLevel, 0);
+}
 
-  if (!entry) {
-    throw new Error(`No RS block table entry for V${version}-${eccLevel}`);
-  }
-
-  // Sum data codewords across all block groups
-  let totalDataCodewords = 0;
-  for (let i = 0; i < entry.length; i += 3) {
-    totalDataCodewords += entry[i] * entry[i + 2];
-  }
-
-  const charCountBits = version <= 9 ? 8 : 16;
-  const overheadBits = 4 + charCountBits;
-
-  return Math.floor((totalDataCodewords * 8 - overheadBits) / 8);
+/**
+ * Maximum raw bytes accepted by `zxing-wasm/writer` when the input is a
+ * Uint8Array. ZXing emits a binary ECI segment for byte input, which consumes
+ * two extra QR codewords versus the legacy qrcode-generator Byte-mode path.
+ */
+export function getMaxZXingWriterByteCapacity(
+  version: number,
+  eccLevel: EccLevel,
+): number {
+  return getMaxByteCapacityWithExtraOverhead(
+    version,
+    eccLevel,
+    ZXING_UINT8_ECI_OVERHEAD_BITS,
+  );
 }
 
 /**
@@ -150,6 +151,32 @@ export function getMinVersion(dataLength: number, eccLevel: EccLevel): number {
   throw new Error(
     `Data too large (${dataLength} bytes) for any QR version at ECC level ${eccLevel}.`,
   );
+}
+
+function getMaxByteCapacityWithExtraOverhead(
+  version: number,
+  eccLevel: EccLevel,
+  extraOverheadBits: number,
+): number {
+  const totalDataCodewords = getTotalDataCodewords(version, eccLevel);
+  const charCountBits = version <= 9 ? 8 : 16;
+  const overheadBits = 4 + charCountBits + extraOverheadBits;
+  return Math.max(0, Math.floor((totalDataCodewords * 8 - overheadBits) / 8));
+}
+
+function getTotalDataCodewords(version: number, eccLevel: EccLevel): number {
+  const idx = (version - 1) * 4 + ECC_INDEX[eccLevel];
+  const entry = RS_BLOCK_TABLE[idx];
+
+  if (!entry) {
+    throw new Error(`No RS block table entry for V${version}-${eccLevel}`);
+  }
+
+  let totalDataCodewords = 0;
+  for (let i = 0; i < entry.length; i += 3) {
+    totalDataCodewords += entry[i] * entry[i + 2];
+  }
+  return totalDataCodewords;
 }
 
 // ---------------------------------------------------------------------------

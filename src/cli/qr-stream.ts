@@ -17,7 +17,7 @@
 
 import { readFileSync, existsSync, openSync, closeSync } from 'fs';
 import { ReadStream } from 'tty';
-import { generateQRMatrix } from '../core/qr/qr_encode';
+import { COMPATIBLE_QR_ENCODER, encodeQRCodeMatrix } from '../core/qr/qr_encoder';
 import { packetize } from '../core/sender/packetizer';
 import { scheduleFrames } from '../core/sender/scheduler';
 import { QR_VERSION, ECC_LEVEL } from '../core/protocol/constants';
@@ -158,7 +158,7 @@ function buildFrames(
 // Main loop
 // ─────────────────────────────────────────────────────────────────────────────────
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
 
   if (args.includes('-h') || args.includes('--help')) {
@@ -228,7 +228,12 @@ function main() {
   // Pre-render all QR matrices to terminal strings
   const frames: string[][] = [];
   for (const pkt of packets) {
-    const matrix = generateQRMatrix(pkt, QR_VERSION, ECC_LEVEL);
+    const matrix = await encodeQRCodeMatrix(
+      pkt,
+      QR_VERSION,
+      ECC_LEVEL,
+      COMPATIBLE_QR_ENCODER,
+    );
     frames.push(renderToTerminal(matrix));
   }
 
@@ -309,4 +314,7 @@ function main() {
   const interval = setInterval(draw, FPS_MS);
 }
 
-main();
+main().catch((err: any) => {
+  console.error(`Error: ${err.message ?? String(err)}`);
+  process.exit(1);
+});
