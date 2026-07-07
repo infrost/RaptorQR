@@ -16,6 +16,12 @@ interface ReceivedFile {
 type InputMode = 'camera' | 'gif-file';
 
 type CSSProps = Record<string, string | number>;
+type DecodeRateSample = { time: number; count: number };
+
+const MIN_SCAN_RATE_FPS = 2;
+const MAX_SCAN_RATE_FPS = 60;
+const DEFAULT_SCAN_RATE_FPS = 7;
+const DECODE_RATE_WINDOW_MS = 1000;
 
 const S = {
   section: {
@@ -82,6 +88,17 @@ const S = {
     fontWeight: 600,
     fontFamily: 'monospace',
     fontSize: 13,
+  } as CSSProps,
+  slider: {
+    width: '100%',
+    accentColor: '#58a6ff',
+  } as CSSProps,
+  sliderLabels: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    color: '#8b949e',
+    fontSize: 12,
+    marginTop: 4,
   } as CSSProps,
   warn: {
     background: '#3d2600',
@@ -161,12 +178,55 @@ export function ReceiverPage() {
   const [error, setError] = useState('');
   const [zoomLevel, setZoomLevel] = useState(1);
   const [hasZoomSupport, setHasZoomSupport] = useState(false);
+  const [scanRateFps, setScanRateFps] = useState(DEFAULT_SCAN_RATE_FPS);
+  const [decodedQrPerSecond, setDecodedQrPerSecond] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [throughputKbps, setThroughputKbps] = useState(0);
   const [solvedGens, setSolvedGens] = useState(0);
   const [sourceGens, setSourceGens] = useState(0);
   const scanStartRef = useRef<number>(0);
   const dataLengthRef = useRef<number>(0);
+  const decodedQrCountRef = useRef(0);
+  const decodedQrRateSamplesRef = useRef<DecodeRateSample[]>([]);
+  const scanIntervalMs = scanRateToIntervalMs(scanRateFps);
+  const scanIntervalMsRef = useRef(scanIntervalMs);
+
+  useEffect(() => {
+    scanIntervalMsRef.current = scanIntervalMs;
+  }, [scanIntervalMs]);
+
+  const updateDecodedQrRate = useCallback((decodedCount: number) => {
+    const now = Date.now();
+    decodedQrCountRef.current = decodedCount;
+    const samples = decodedQrRateSamplesRef.current;
+    samples.push({ time: now, count: decodedCount });
+
+    while (samples.length > 1 && now - samples[0]!.time > DECODE_RATE_WINDOW_MS) {
+      samples.shift();
+    }
+
+    const first = samples[0];
+    if (!first) {
+      setDecodedQrPerSecond(0);
+      return;
+    }
+
+    const elapsedSeconds = (now - first.time) / 1000;
+    if (elapsedSeconds <= 0) {
+      setDecodedQrPerSecond(0);
+      return;
+    }
+
+    setDecodedQrPerSecond((decodedCount - first.count) / elapsedSeconds);
+  }, []);
+
+  useEffect(() => {
+    if (!scanning) return;
+    const id = window.setInterval(() => {
+      updateDecodedQrRate(decodedQrCountRef.current);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [scanning, updateDecodedQrRate]);
 
   // ── Create decode worker ───────────────────────────────────────────────
   function createWorker(): Worker {
@@ -180,7 +240,9 @@ export function ReceiverPage() {
       switch (msg.type) {
         case 'progress': {
           setTotalFrames(msg.totalFrames ?? 0);
-          setFramesWithQR(msg.framesWithQR ?? 0);
+          const decodedQrCount = msg.framesWithQR ?? 0;
+          setFramesWithQR(decodedQrCount);
+          updateDecodedQrRate(decodedQrCount);
           setAcceptedPackets(msg.acceptedPackets ?? 0);
           setNeededPackets(msg.neededPackets ?? 0);
           setSolvedGens(msg.solvedGenerations ?? 0);
@@ -275,6 +337,10 @@ export function ReceiverPage() {
     }
   }, []);
 
+  const handleScanRateChange = useCallback((value: string) => {
+    setScanRateFps(clampScanRate(Number(value)));
+  }, []);
+
   // ── Start camera scanning ───────────────────────────────────────────────
   const startCameraScanning = useCallback(async () => {
     setError('');
@@ -284,12 +350,20 @@ export function ReceiverPage() {
     setFramesWithQR(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
+    setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
     setSolvedGens(0);
     setSourceGens(0);
     scanStartRef.current = 0;
     dataLengthRef.current = 0;
+    decodedQrCountRef.current = 0;
+    decodedQrRateSamplesRef.current = [];
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError(getCameraUnavailableMessage());
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -330,10 +404,9 @@ export function ReceiverPage() {
       setStatus('Scanning…');
 
       let lastCapture = 0;
-      const CAPTURE_INTERVAL = 150;
       const loop = (time: number) => {
         if (!scanningRef.current) return;
-        if (time - lastCapture >= CAPTURE_INTERVAL) {
+        if (time - lastCapture >= scanIntervalMsRef.current) {
           captureFrame();
           lastCapture = time;
         }
@@ -358,12 +431,15 @@ export function ReceiverPage() {
     setFramesWithQR(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
+    setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
     setSolvedGens(0);
     setSourceGens(0);
     scanStartRef.current = 0;
     dataLengthRef.current = 0;
+    decodedQrCountRef.current = 0;
+    decodedQrRateSamplesRef.current = [];
 
     const worker = createWorker();
     workerRef.current = worker;
@@ -521,6 +597,25 @@ export function ReceiverPage() {
       {inputMode === 'camera' && (
         <div style={S.section}>
           <div style={S.label}>Camera</div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={S.label}>Scan rate</span>
+              <span style={S.statValue}>{scanRateFps} fps · {scanIntervalMs} ms/sample</span>
+            </div>
+            <input
+              type="range"
+              min={MIN_SCAN_RATE_FPS}
+              max={MAX_SCAN_RATE_FPS}
+              step={1}
+              value={scanRateFps}
+              style={S.slider}
+              onInput={(e) => handleScanRateChange((e.target as HTMLInputElement).value)}
+            />
+            <div style={S.sliderLabels}>
+              <span>Stable</span>
+              <span>Fast</span>
+            </div>
+          </div>
           <div
             ref={videoContainerRef}
             style={{ position: 'relative', display: 'inline-block', maxWidth: 480, width: '100%' }}
@@ -559,6 +654,9 @@ export function ReceiverPage() {
               </span>
               <span>
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
+              </span>
+              <span>
+                decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
               </span>
               <span>
                 time <span style={S.statValue}>{formatDuration(elapsedMs)}</span>
@@ -626,6 +724,9 @@ export function ReceiverPage() {
               </span>
               <span>
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
+              </span>
+              <span>
+                decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
               </span>
               <span>
                 time <span style={S.statValue}>{formatDuration(elapsedMs)}</span>
@@ -710,4 +811,20 @@ function formatDuration(ms: number): string {
   const remS = s % 60;
   if (m > 0) return `${m}m${remS.toString().padStart(2, '0')}s`;
   return `${s}s`;
+}
+
+function clampScanRate(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_SCAN_RATE_FPS;
+  return Math.min(MAX_SCAN_RATE_FPS, Math.max(MIN_SCAN_RATE_FPS, Math.round(value)));
+}
+
+function scanRateToIntervalMs(fps: number): number {
+  return Math.round(1000 / clampScanRate(fps));
+}
+
+function getCameraUnavailableMessage(): string {
+  if (!window.isSecureContext) {
+    return 'Camera API is unavailable because this page is not in a secure context. Use HTTPS, localhost, or upload a GIF instead.';
+  }
+  return 'Camera API is unavailable in this browser. Try a recent Chrome/Safari/Edge browser, or upload a GIF instead.';
 }

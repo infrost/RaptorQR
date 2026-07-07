@@ -1,7 +1,10 @@
 /**
- * Sender page — text/file input, GIF generation preview.
+ * Sender page — text/file input, live QR playback, and GIF export.
  */
-import { useState, useCallback, useRef } from 'preact/hooks';
+import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
+import { generateQRMatrix } from '@/core/qr/qr_encode';
+import { rasterizeQR } from '@/core/qr/frame_raster';
+import { ECC_LEVEL, QR_VERSION } from '@/core/protocol/constants';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -12,11 +15,35 @@ interface GifResult {
   width: number;
   height: number;
   frameCount: number;
+  frameRateFps: number;
+  frameDelayMs: number;
+}
+
+interface LiveTransfer {
+  packets: Uint8Array[];
+  width: number;
+  height: number;
+  moduleCount: number;
+  scale: number;
+  quietZone: number;
+  frameCount: number;
+}
+
+interface FrameCache {
+  frames: Map<number, ImageData>;
+  maxEntries: number;
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 type CSSProps = Record<string, string | number>;
+
+const MIN_FRAME_RATE_FPS = 2;
+const MAX_FRAME_RATE_FPS = 60;
+const DEFAULT_FRAME_RATE_FPS = 5;
+const LIVE_TARGET_PX = 360;
+const QR_QUIET_ZONE_MODULES = 4;
+const FRAME_CACHE_LIMIT = 120;
 
 const S = {
   section: {
@@ -89,6 +116,17 @@ const S = {
   } as CSSProps,
   infoLabel: { color: '#8b949e' },
   infoValue: { color: '#f0f6fc', fontFamily: 'monospace' },
+  slider: {
+    width: '100%',
+    accentColor: '#58a6ff',
+  } as CSSProps,
+  sliderLabels: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    color: '#8b949e',
+    fontSize: 12,
+    marginTop: 4,
+  } as CSSProps,
   warn: {
     background: '#3d2600',
     border: '1px solid #bb8009',
@@ -137,25 +175,94 @@ export function SenderPage() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
+  const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
+  const [liveTransfer, setLiveTransfer] = useState<LiveTransfer | null>(null);
   const [gifResult, setGifResult] = useState<GifResult | null>(null);
   const [stats, setStats] = useState<{ originalSize: number; preprocessedSize: number; frameCount: number; totalGenerations: number } | null>(null);
-  const [gifUrl, setGifUrl] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  const gifUrlRef = useRef<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveTransferRef = useRef<LiveTransfer | null>(null);
+  const playbackTimerRef = useRef<number | null>(null);
+  const liveFrameIndexRef = useRef(0);
+  const frameRateFpsRef = useRef(DEFAULT_FRAME_RATE_FPS);
+  const frameCacheRef = useRef<FrameCache>(createFrameCache());
+  const frameDelayMs = frameRateToDelayMs(frameRateFps);
 
-  /** Wipe all output state and revoke any existing blob URL. */
+  const clearPlaybackTimer = useCallback(() => {
+    if (playbackTimerRef.current !== null) {
+      window.clearTimeout(playbackTimerRef.current);
+      playbackTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleNextLiveFrame = useCallback(() => {
+    clearPlaybackTimer();
+    const delayMs = frameRateToDelayMs(frameRateFpsRef.current);
+
+    playbackTimerRef.current = window.setTimeout(() => {
+      const transfer = liveTransferRef.current;
+      const canvas = canvasRef.current;
+      if (!transfer || !canvas) return;
+
+      try {
+        const frameIndex = liveFrameIndexRef.current % transfer.frameCount;
+        drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+        liveFrameIndexRef.current = (frameIndex + 1) % transfer.frameCount;
+        scheduleNextLiveFrame();
+      } catch (err: any) {
+        clearPlaybackTimer();
+        setError(err.message ?? String(err));
+      }
+    }, delayMs);
+  }, [clearPlaybackTimer]);
+
+  const startLivePlayback = useCallback((resetIndex: boolean) => {
+    clearPlaybackTimer();
+
+    const transfer = liveTransferRef.current;
+    const canvas = canvasRef.current;
+    if (!transfer || !canvas) return;
+
+    if (resetIndex) {
+      liveFrameIndexRef.current = 0;
+    }
+
+    const frameIndex = liveFrameIndexRef.current % transfer.frameCount;
+    drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+    liveFrameIndexRef.current = (frameIndex + 1) % transfer.frameCount;
+    scheduleNextLiveFrame();
+  }, [clearPlaybackTimer, scheduleNextLiveFrame]);
+
+  useEffect(() => {
+    frameRateFpsRef.current = frameRateFps;
+  }, [frameRateFps]);
+
+  useEffect(() => {
+    liveTransferRef.current = liveTransfer;
+    frameCacheRef.current.frames.clear();
+
+    if (liveTransfer) {
+      startLivePlayback(true);
+    } else {
+      clearPlaybackTimer();
+    }
+
+    return clearPlaybackTimer;
+  }, [liveTransfer, clearPlaybackTimer, startLivePlayback]);
+
+  /** Wipe all output state and stop any live playback loop. */
   const resetOutput = useCallback(() => {
+    clearPlaybackTimer();
+    liveTransferRef.current = null;
+    liveFrameIndexRef.current = 0;
+    frameCacheRef.current.frames.clear();
+    setLiveTransfer(null);
     setGifResult(null);
     setStats(null);
     setError('');
     setStatus('');
-    if (gifUrlRef.current) {
-      URL.revokeObjectURL(gifUrlRef.current);
-      gifUrlRef.current = null;
-    }
-    setGifUrl(null);
-  }, []);
+  }, [clearPlaybackTimer]);
 
   const handleModeChange = useCallback((newMode: InputMode) => {
     setMode(newMode);
@@ -164,10 +271,10 @@ export function SenderPage() {
 
   const handleTextChange = useCallback((value: string) => {
     setText(value);
-    if (gifUrlRef.current || gifResult || stats) {
+    if (liveTransfer || gifResult || stats) {
       resetOutput();
     }
-  }, [resetOutput, gifResult, stats]);
+  }, [resetOutput, liveTransfer, gifResult, stats]);
 
   const handleFile = useCallback((e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -175,6 +282,15 @@ export function SenderPage() {
     setFile(newFile);
     resetOutput();
   }, [resetOutput]);
+
+  const handleFrameRateChange = useCallback((value: string) => {
+    const nextFrameRate = clampFrameRate(Number(value));
+    frameRateFpsRef.current = nextFrameRate;
+    setFrameRateFps(nextFrameRate);
+    if (liveTransferRef.current) {
+      startLivePlayback(false);
+    }
+  }, [startLivePlayback]);
 
   const handleGenerate = useCallback(async () => {
     resetOutput();
@@ -241,9 +357,12 @@ export function SenderPage() {
         frameCount: encoded.stats.frameCount,
         totalGenerations: encoded.totalGenerations,
       });
-      setStatus(`Generating GIF (${encoded.stats.frameCount} frames)…`);
+      setLiveTransfer(createLiveTransfer(encoded.packets));
+      setStatus(`Live QR running (${encoded.stats.frameCount} frames). Preparing GIF download…`);
 
       // ── Step 2: GIF worker ─────────────────────────────────────────
+      const outputFrameRateFps = frameRateFpsRef.current;
+      const outputFrameDelayMs = frameRateToDelayMs(outputFrameRateFps);
       const gifWorker = new Worker(
         new URL('@/workers/gif.worker.ts', import.meta.url),
         { type: 'module' },
@@ -259,29 +378,21 @@ export function SenderPage() {
               width: e.data.width,
               height: e.data.height,
               frameCount: e.data.frameCount,
+              frameRateFps: outputFrameRateFps,
+              frameDelayMs: outputFrameDelayMs,
             });
           } else if (e.data.type === 'error') {
             reject(new Error(e.data.message));
           }
         };
         gifWorker.onerror = (err) => { clearTimeout(timeout); reject(err); };
-        const transfer: ArrayBufferLike[] = [];
-        const transferPackets = encoded.packets.map((p) => {
-          if (p.buffer.byteLength <= 1024 * 1024) transfer.push(p.buffer as ArrayBuffer);
-          return p;
-        });
-        const transferList = transfer.length > 0 ? (transfer as ArrayBuffer[]) : [];
         gifWorker.postMessage(
-          { type: 'generate', packets: transferPackets },
-          transferList,
+          { type: 'generate', packets: encoded.packets, frameDelayMs: outputFrameDelayMs },
         );
       });
       gifWorker.terminate();
 
       // ── Step 3: show result ────────────────────────────────────────
-      const url = URL.createObjectURL(new Blob([gif.gifData], { type: 'image/gif' }));
-      gifUrlRef.current = url;
-      setGifUrl(url);
       setGifResult(gif);
       setStatus('Done ✓');
     } catch (err: any) {
@@ -330,6 +441,25 @@ export function SenderPage() {
 
       {/* ── Generate ────────────────────────────────────────────────────── */}
       <div style={S.section}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={S.label}>QR speed</span>
+            <span style={S.infoValue}>{frameRateFps} fps · {frameDelayMs} ms/frame</span>
+          </div>
+          <input
+            type="range"
+            min={MIN_FRAME_RATE_FPS}
+            max={MAX_FRAME_RATE_FPS}
+            step={1}
+            value={frameRateFps}
+            style={S.slider}
+            onInput={(e) => handleFrameRateChange((e.target as HTMLInputElement).value)}
+          />
+          <div style={S.sliderLabels}>
+            <span>Stable</span>
+            <span>Fast</span>
+          </div>
+        </div>
         <button
           style={busy ? { ...S.btn, opacity: 0.6, cursor: 'not-allowed' } : S.btn}
           disabled={busy}
@@ -341,20 +471,32 @@ export function SenderPage() {
               {status || 'Processing…'}
             </>
           ) : (
-            'Generate GIF'
+            'Start Transfer'
           )}
         </button>
         {error && <div style={S.warn}>⚠ {error}</div>}
       </div>
 
       {/* ── Preview ──────────────────────────────────────────────────────────── */}
-      {gifUrl && gifResult && (
+      {liveTransfer && (
         <div style={S.section}>
-          <div style={S.label}>Preview</div>
-          <img src={gifUrl} alt="QR transfer GIF" style={S.preview} />
+          <div style={S.label}>Live QR Transfer</div>
+          <canvas
+            ref={canvasRef}
+            width={liveTransfer.width}
+            height={liveTransfer.height}
+            aria-label="Live QR transfer frames"
+            style={S.preview}
+          />
           <div style={{ ...S.row, marginTop: 8 }}>
-            <button style={S.btn} onClick={handleDownload}>
-              ⬇ Download GIF ({Math.round(gifResult.gifData.byteLength / 1024)} KB)
+            <button
+              style={gifResult ? S.btn : { ...S.btnSecondary, opacity: 0.6, cursor: 'not-allowed' }}
+              disabled={!gifResult}
+              onClick={handleDownload}
+            >
+              {gifResult
+                ? `⬇ Download GIF (${Math.round(gifResult.gifData.byteLength / 1024)} KB)`
+                : 'Preparing GIF export…'}
             </button>
           </div>
         </div>
@@ -371,6 +513,10 @@ export function SenderPage() {
             <span style={S.infoValue}>{formatBytes(stats.preprocessedSize)}</span>
             <span style={S.infoLabel}>Frame count</span>
             <span style={S.infoValue}>{stats.frameCount}</span>
+            <span style={S.infoLabel}>Live speed</span>
+            <span style={S.infoValue}>{frameRateFps} fps ({frameDelayMs} ms)</span>
+            <span style={S.infoLabel}>GIF export speed</span>
+            <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${gifResult.frameDelayMs} ms)` : 'Preparing…'}</span>
             <span style={S.infoLabel}>Generations</span>
             <span style={S.infoValue}>{stats.totalGenerations}</span>
             <span style={S.infoLabel}>GIF size</span>
@@ -388,4 +534,82 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function clampFrameRate(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_FRAME_RATE_FPS;
+  return Math.min(MAX_FRAME_RATE_FPS, Math.max(MIN_FRAME_RATE_FPS, Math.round(value)));
+}
+
+function frameRateToDelayMs(fps: number): number {
+  return Math.round(1000 / clampFrameRate(fps));
+}
+
+function createFrameCache(): FrameCache {
+  return { frames: new Map(), maxEntries: FRAME_CACHE_LIMIT };
+}
+
+function createLiveTransfer(packets: Uint8Array[]): LiveTransfer {
+  if (packets.length === 0) {
+    throw new Error('No QR packets were generated.');
+  }
+
+  const moduleCount = QR_VERSION * 4 + 17;
+  const totalModules = moduleCount + QR_QUIET_ZONE_MODULES * 2;
+  const scale = Math.max(2, Math.round(LIVE_TARGET_PX / totalModules));
+  const size = totalModules * scale;
+
+  return {
+    packets,
+    width: size,
+    height: size,
+    moduleCount,
+    scale,
+    quietZone: QR_QUIET_ZONE_MODULES,
+    frameCount: packets.length,
+  };
+}
+
+function drawLiveFrame(
+  canvas: HTMLCanvasElement,
+  transfer: LiveTransfer,
+  frameIndex: number,
+  cache: FrameCache,
+): void {
+  if (canvas.width !== transfer.width) canvas.width = transfer.width;
+  if (canvas.height !== transfer.height) canvas.height = transfer.height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context is unavailable.');
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.putImageData(getLiveFrameImage(transfer, frameIndex, cache), 0, 0);
+}
+
+function getLiveFrameImage(
+  transfer: LiveTransfer,
+  frameIndex: number,
+  cache: FrameCache,
+): ImageData {
+  const cacheKey = frameIndex % transfer.frameCount;
+  const cached = cache.frames.get(cacheKey);
+  if (cached) return cached;
+
+  const packet = transfer.packets[cacheKey];
+  if (!packet) {
+    throw new Error(`Missing QR packet at frame ${cacheKey}.`);
+  }
+
+  const matrix = generateQRMatrix(packet, QR_VERSION, ECC_LEVEL);
+  const image = rasterizeQR(matrix, transfer.scale);
+  cache.frames.set(cacheKey, image);
+
+  if (cache.frames.size > cache.maxEntries) {
+    const oldestKey = cache.frames.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.frames.delete(oldestKey);
+    }
+  }
+
+  return image;
 }

@@ -21,6 +21,9 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  server: {
+    allowedHosts: ['dev.linkto.host'],
+  },
   base: './',
   build: {
     outDir: 'dist',

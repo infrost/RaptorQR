@@ -15,6 +15,7 @@ import { QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@/core/protocol/constants
 interface GenerateInput {
   type: 'generate';
   packets: Uint8Array[];
+  frameDelayMs?: number;
 }
 
 interface GifOutput {
@@ -46,6 +47,7 @@ self.onmessage = (e: MessageEvent<GenerateInput>) => {
 
 function handleGenerate(input: GenerateInput): GifOutput {
   const { packets } = input;
+  const frameDelayMs = normalizeFrameDelayMs(input.frameDelayMs);
 
   const moduleCount = QR_VERSION * 4 + 17;
 
@@ -72,7 +74,7 @@ function handleGenerate(input: GenerateInput): GifOutput {
   }
 
   // ─── Create animated GIF ───────────────────────────────────────────────
-  const gifBytes = createQRGif(frames, FRAME_DELAY_MS, width, height);
+  const gifBytes = createQRGif(frames, frameDelayMs, width, height);
 
   return {
     type: 'gifReady',
@@ -81,4 +83,9 @@ function handleGenerate(input: GenerateInput): GifOutput {
     height,
     frameCount: frames.length,
   };
+}
+
+function normalizeFrameDelayMs(value: number | undefined): number {
+  if (!Number.isFinite(value)) return FRAME_DELAY_MS;
+  return Math.min(500, Math.max(17, Math.round(value!)));
 }
