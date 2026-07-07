@@ -4,7 +4,12 @@
 import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
 import { generateQRMatrix } from '@/core/qr/qr_encode';
 import { rasterizeQR } from '@/core/qr/frame_raster';
-import { ECC_LEVEL, QR_VERSION } from '@/core/protocol/constants';
+import {
+  DEFAULT_QR_PROFILE_ID,
+  getQRTransferProfile,
+  QR_TRANSFER_PROFILES,
+  type QRTransferProfile,
+} from '@/core/protocol/profiles';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,9 +28,10 @@ interface LiveTransfer {
   packets: Uint8Array[];
   width: number;
   height: number;
-  moduleCount: number;
+  version: number;
+  eccLevel: QRTransferProfile['eccLevel'];
+  symbolSize: number;
   scale: number;
-  quietZone: number;
   frameCount: number;
 }
 
@@ -127,6 +133,15 @@ const S = {
     fontSize: 12,
     marginTop: 4,
   } as CSSProps,
+  select: {
+    width: '100%',
+    background: '#0d1117',
+    color: '#c9d1d9',
+    border: '1px solid #30363d',
+    borderRadius: 6,
+    padding: '9px 10px',
+    fontSize: 14,
+  } as CSSProps,
   warn: {
     background: '#3d2600',
     border: '1px solid #bb8009',
@@ -175,6 +190,7 @@ export function SenderPage() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
+  const [qrProfileId, setQrProfileId] = useState(DEFAULT_QR_PROFILE_ID);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
   const [liveTransfer, setLiveTransfer] = useState<LiveTransfer | null>(null);
   const [gifResult, setGifResult] = useState<GifResult | null>(null);
@@ -187,6 +203,7 @@ export function SenderPage() {
   const liveFrameIndexRef = useRef(0);
   const frameRateFpsRef = useRef(DEFAULT_FRAME_RATE_FPS);
   const frameCacheRef = useRef<FrameCache>(createFrameCache());
+  const qrProfile = getQRTransferProfile(qrProfileId);
   const frameDelayMs = frameRateToDelayMs(frameRateFps);
 
   const clearPlaybackTimer = useCallback(() => {
@@ -283,6 +300,11 @@ export function SenderPage() {
     resetOutput();
   }, [resetOutput]);
 
+  const handleQRProfileChange = useCallback((value: string) => {
+    setQrProfileId(value);
+    resetOutput();
+  }, [resetOutput]);
+
   const handleFrameRateChange = useCallback((value: string) => {
     const nextFrameRate = clampFrameRate(Number(value));
     frameRateFpsRef.current = nextFrameRate;
@@ -311,6 +333,7 @@ export function SenderPage() {
     }
 
     const compress = data.byteLength > 64;
+    const selectedQRProfile = getQRTransferProfile(qrProfileId);
 
     setBusy(true);
     setStatus('Encoding data…');
@@ -343,6 +366,7 @@ export function SenderPage() {
             data,
             isText,
             compress,
+            symbolSize: selectedQRProfile.maxPayloadSize,
             filename: mode === 'file' ? file?.name : undefined,
             mimeType: mode === 'file' ? file?.type : undefined,
           },
@@ -357,7 +381,7 @@ export function SenderPage() {
         frameCount: encoded.stats.frameCount,
         totalGenerations: encoded.totalGenerations,
       });
-      setLiveTransfer(createLiveTransfer(encoded.packets));
+      setLiveTransfer(createLiveTransfer(encoded.packets, selectedQRProfile));
       setStatus(`Live QR running (${encoded.stats.frameCount} frames). Preparing GIF download…`);
 
       // ── Step 2: GIF worker ─────────────────────────────────────────
@@ -387,7 +411,13 @@ export function SenderPage() {
         };
         gifWorker.onerror = (err) => { clearTimeout(timeout); reject(err); };
         gifWorker.postMessage(
-          { type: 'generate', packets: encoded.packets, frameDelayMs: outputFrameDelayMs },
+          {
+            type: 'generate',
+            packets: encoded.packets,
+            frameDelayMs: outputFrameDelayMs,
+            qrVersion: selectedQRProfile.version,
+            eccLevel: selectedQRProfile.eccLevel,
+          },
         );
       });
       gifWorker.terminate();
@@ -400,7 +430,7 @@ export function SenderPage() {
     } finally {
       setBusy(false);
     }
-  }, [mode, text, file, resetOutput]);
+  }, [mode, text, file, resetOutput, qrProfileId]);
 
   const handleDownload = useCallback(() => {
     if (!gifResult) return;
@@ -441,6 +471,24 @@ export function SenderPage() {
 
       {/* ── Generate ────────────────────────────────────────────────────── */}
       <div style={S.section}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={S.label}>QR size</span>
+            <span style={S.infoValue}>{qrProfile.maxPayloadSize} B/frame</span>
+          </div>
+          <select
+            value={qrProfileId}
+            style={S.select}
+            disabled={busy}
+            onChange={(e) => handleQRProfileChange((e.target as HTMLSelectElement).value)}
+          >
+            {QR_TRANSFER_PROFILES.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.label} · {profile.maxPayloadSize} B/frame
+              </option>
+            ))}
+          </select>
+        </div>
         <div style={{ marginBottom: 16 }}>
           <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={S.label}>QR speed</span>
@@ -511,6 +559,10 @@ export function SenderPage() {
             <span style={S.infoValue}>{formatBytes(stats.originalSize)}</span>
             <span style={S.infoLabel}>Preprocessed size</span>
             <span style={S.infoValue}>{formatBytes(stats.preprocessedSize)}</span>
+            <span style={S.infoLabel}>QR size</span>
+            <span style={S.infoValue}>{liveTransfer ? `V${liveTransfer.version}-${liveTransfer.eccLevel}` : qrProfile.label}</span>
+            <span style={S.infoLabel}>Symbol payload</span>
+            <span style={S.infoValue}>{liveTransfer ? `${liveTransfer.symbolSize} B/frame` : `${qrProfile.maxPayloadSize} B/frame`}</span>
             <span style={S.infoLabel}>Frame count</span>
             <span style={S.infoValue}>{stats.frameCount}</span>
             <span style={S.infoLabel}>Live speed</span>
@@ -549,12 +601,12 @@ function createFrameCache(): FrameCache {
   return { frames: new Map(), maxEntries: FRAME_CACHE_LIMIT };
 }
 
-function createLiveTransfer(packets: Uint8Array[]): LiveTransfer {
+function createLiveTransfer(packets: Uint8Array[], profile: QRTransferProfile): LiveTransfer {
   if (packets.length === 0) {
     throw new Error('No QR packets were generated.');
   }
 
-  const moduleCount = QR_VERSION * 4 + 17;
+  const moduleCount = profile.version * 4 + 17;
   const totalModules = moduleCount + QR_QUIET_ZONE_MODULES * 2;
   const scale = Math.max(2, Math.round(LIVE_TARGET_PX / totalModules));
   const size = totalModules * scale;
@@ -563,9 +615,10 @@ function createLiveTransfer(packets: Uint8Array[]): LiveTransfer {
     packets,
     width: size,
     height: size,
-    moduleCount,
+    version: profile.version,
+    eccLevel: profile.eccLevel,
+    symbolSize: profile.maxPayloadSize,
     scale,
-    quietZone: QR_QUIET_ZONE_MODULES,
     frameCount: packets.length,
   };
 }
@@ -600,7 +653,7 @@ function getLiveFrameImage(
     throw new Error(`Missing QR packet at frame ${cacheKey}.`);
   }
 
-  const matrix = generateQRMatrix(packet, QR_VERSION, ECC_LEVEL);
+  const matrix = generateQRMatrix(packet, transfer.version, transfer.eccLevel);
   const image = rasterizeQR(matrix, transfer.scale);
   cache.frames.set(cacheKey, image);
 

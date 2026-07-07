@@ -46,7 +46,8 @@ describe('Frame raster', () => {
     const gray = rasterizeToGrayscale(matrix, 3);
     const decoded = decodeQRFromBuffer(gray.data, gray.width, gray.height);
     expect(decoded).not.toBeNull();
-    expect(new TextDecoder().decode(decoded!)).toBe(original);
+    expect(decoded!.version).toBe(1);
+    expect(new TextDecoder().decode(decoded!.bytes)).toBe(original);
   });
 });
 

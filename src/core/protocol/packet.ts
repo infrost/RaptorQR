@@ -8,7 +8,7 @@
  * | 0      | 1    | magic              | 0x51 ('Q')                           |
  * | 1      | 4    | packed_word        | see packWord / unpackWord below      |
  * | 5      | 3    | data_length        | 24-bit unsigned (0–16,777,215)       |
- * | 8      | N    | payload            | fixed 201 bytes (zero-padded)        |
+ * | 8      | N    | payload            | selected profile symbol bytes        |
  * | 8+N    | 4    | packet_crc32c      | CRC32C over bytes 0–7 + payload      |
  *
  * packed_word layout (32 bits, little-endian):
@@ -27,7 +27,7 @@
  * @module
  */
 
-import { MAGIC_BYTE, HEADER_SIZE, CRC32C_SIZE, MAX_PAYLOAD_SIZE } from './constants';
+import { MAGIC_BYTE, HEADER_SIZE, CRC32C_SIZE } from './constants';
 import { crc32c } from './crc32c';
 
 // ─── Little-endian helpers ───────────────────────────────────────────────────

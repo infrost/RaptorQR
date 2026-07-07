@@ -9,7 +9,7 @@ import { inflateSync } from 'fflate';
 import { decodeQRFromCanvas } from '@/core/qr/qr_decode';
 import { parsePacket } from '@/core/protocol/packet';
 import type { Packet } from '@/core/protocol/packet';
-import { K, MAX_PAYLOAD_SIZE, sourceGenerationsFromTotal } from '@/core/protocol/constants';
+import { K, sourceGenerationsFromTotal } from '@/core/protocol/constants';
 import { GenerationDecoder } from '@/core/fec/rlnc_decoder';
 import { assemblePayload } from '@/core/reconstruct/assemble';
 
@@ -23,6 +23,8 @@ interface DecodeState {
   totalGenerations: number;
   sourceGenerations: number;
   dataLength: number;
+  symbolSize: number;
+  qrVersion: number;
   isText: boolean;
   isCompressed: boolean;
   completed: boolean;
@@ -77,7 +79,7 @@ function handleFrame(imageData: ImageData): void {
 
   let packet: Packet;
   try {
-    packet = parsePacket(decoded);
+    packet = parsePacket(decoded.bytes);
   } catch {
     return;
   }
@@ -87,14 +89,17 @@ function handleFrame(imageData: ImageData): void {
   // Start fresh on first valid packet
   if (!current) {
     const sourceGens = sourceGenerationsFromTotal(h.totalGenerations);
+    const symbolSize = packet.payload.length;
     current = {
-      decoder: new GenerationDecoder(K, MAX_PAYLOAD_SIZE),
+      decoder: new GenerationDecoder(K, symbolSize),
       dedup: new Set(),
       receivedPackets: 0,
       solvedGenerations: new Set(),
       totalGenerations: h.totalGenerations,
       sourceGenerations: sourceGens,
       dataLength: h.dataLength,
+      symbolSize,
+      qrVersion: decoded.version,
       isText: h.isText,
       isCompressed: h.compressed,
       completed: false,
@@ -104,10 +109,18 @@ function handleFrame(imageData: ImageData): void {
 
   if (current.completed) return;
 
+  if (packet.payload.length !== current.symbolSize) {
+    throw new Error(
+      `QR payload size changed from ${current.symbolSize} to ${packet.payload.length} bytes. ` +
+      'Restart the scan before switching QR size.',
+    );
+  }
+
   // Update metadata from header
   current.totalGenerations = h.totalGenerations;
   current.sourceGenerations = sourceGenerationsFromTotal(h.totalGenerations);
   current.dataLength = h.dataLength;
+  current.qrVersion = decoded.version;
   current.isText = h.isText;
   current.isCompressed = h.compressed;
 
@@ -173,7 +186,12 @@ function reconstructData(state: DecodeState): void {
   // Use assemblePayload which handles outer RS recovery
   let preprocessed: Uint8Array;
   try {
-    preprocessed = assemblePayload(solvedMap, state.totalGenerations, state.dataLength);
+    preprocessed = assemblePayload(
+      solvedMap,
+      state.totalGenerations,
+      state.dataLength,
+      state.symbolSize,
+    );
   } catch (err: any) {
     self.postMessage({
       type: 'error',
@@ -264,6 +282,8 @@ function reportProgress(state: DecodeState): void {
     totalGenerations: totalGens,
     sourceGenerations: state.sourceGenerations,
     dataLength: state.dataLength,
+    symbolSize: state.symbolSize,
+    qrVersion: state.qrVersion,
     status: totalGens > 0
       ? `Receiving (${solvedGens}/${state.sourceGenerations} gens)`
       : 'Receiving…',

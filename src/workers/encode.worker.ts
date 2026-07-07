@@ -16,6 +16,7 @@ interface EncodeInput {
   compress: boolean;
   filename?: string;
   mimeType?: string;
+  symbolSize?: number;
 }
 
 interface EncodeOutput {
@@ -53,7 +54,14 @@ self.onmessage = (e: MessageEvent<EncodeInput>) => {
 
 function handleEncode(input: EncodeInput): EncodeOutput {
   const originalBytes = new Uint8Array(input.data);
-  const result = packetize(originalBytes, input.isText, input.compress, input.filename, input.mimeType);
+  const result = packetize(
+    originalBytes,
+    input.isText,
+    input.compress,
+    input.filename,
+    input.mimeType,
+    { symbolSize: input.symbolSize },
+  );
   const frames = scheduleFrames(result.packets, result.totalGenerations);
 
   return {

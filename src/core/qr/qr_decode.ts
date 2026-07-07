@@ -1,5 +1,5 @@
 /**
- * QR code decoding wrapper (receiver-side tests).
+ * QR code decoding wrapper.
  *
  * Uses the `jsQR` library to extract QR payloads from raw pixel data.
  * Handles binary data (bytes 0-255) by reading from chunk.bytes
@@ -7,7 +7,10 @@
  */
 import jsQR from 'jsqr';
 
-export type QrDecodeResult = Uint8Array | null;
+export interface QrDecodeResult {
+  bytes: Uint8Array;
+  version: number;
+}
 
 /**
  * Extract raw bytes from a jsQR result.
@@ -47,17 +50,16 @@ function extractBytes(result: { chunks?: Array<{ bytes?: number[]; text?: string
 /**
  * Decode a QR code from an `ImageData` object (e.g. from a `<canvas>`).
  *
- * Returns raw bytes (Uint8Array) to preserve binary data through
- * the QR decode process. Returns null if no QR code is found.
+ * Returns raw bytes and QR version. Returns null if no QR code is found.
  *
  * @param imageData  RGBA pixel data from a canvas (width × height × 4 bytes)
  * @param opts       Optional jsQR options (e.g. inversionAttempts)
- * @returns The decoded raw bytes, or `null` if no QR code could be found/decoded.
+ * @returns The decoded QR payload and version, or `null` if no QR code could be found/decoded.
  */
 export function decodeQRFromCanvas(
   imageData: ImageData,
   opts?: { inversionAttempts?: 'attemptBoth' | 'dontInvert' | 'onlyInvert' | 'invertFirst' },
-): Uint8Array | null {
+): QrDecodeResult | null {
   const result = jsQR(
     imageData.data,
     imageData.width,
@@ -65,7 +67,8 @@ export function decodeQRFromCanvas(
     { inversionAttempts: opts?.inversionAttempts ?? 'attemptBoth' },
   );
   if (!result) return null;
-  return extractBytes(result);
+  const bytes = extractBytes(result);
+  return bytes ? { bytes, version: result.version } : null;
 }
 
 /**
@@ -77,13 +80,13 @@ export function decodeQRFromCanvas(
  * @param grayBuffer  Flat luma array, length = width × height
  * @param width       Image width in pixels
  * @param height      Image height in pixels
- * @returns The decoded raw bytes, or `null` if no QR code could be found/decoded.
+ * @returns The decoded QR payload and version, or `null` if no QR code could be found/decoded.
  */
 export function decodeQRFromBuffer(
   grayBuffer: Uint8Array,
   width: number,
   height: number,
-): Uint8Array | null {
+): QrDecodeResult | null {
   if (grayBuffer.length !== width * height) {
     throw new Error(
       `Buffer size mismatch: expected ${width}×${height} = ${width * height} ` +
@@ -107,5 +110,6 @@ export function decodeQRFromBuffer(
     inversionAttempts: 'attemptBoth',
   });
   if (!result) return null;
-  return extractBytes(result);
+  const bytes = extractBytes(result);
+  return bytes ? { bytes, version: result.version } : null;
 }

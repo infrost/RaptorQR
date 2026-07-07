@@ -570,6 +570,65 @@ describe('End-to-End', () => {
     expect(recovered).toBe(text);
   });
 
+  it('should roundtrip with a manually selected larger QR profile', async () => {
+    const { packetize } = await import('@/core/sender/packetizer');
+    const { scheduleFrames } = await import('@/core/sender/scheduler');
+    const { parsePacket } = await import('@/core/protocol/packet');
+    const { GenerationDecoder } = await import('@/core/fec/rlnc_decoder');
+    const { assemblePayload } = await import('@/core/reconstruct/assemble');
+    const { getQRTransferProfile } = await import('@/core/protocol/profiles');
+    const { K } = await import('@/core/protocol/constants');
+
+    const profile = getQRTransferProfile('v20-m');
+    const data = new Uint8Array(profile.maxPayloadSize + 123);
+    for (let i = 0; i < data.length; i++) data[i] = i & 0xff;
+
+    const result = packetize(
+      data,
+      false,
+      false,
+      undefined,
+      undefined,
+      { symbolSize: profile.maxPayloadSize },
+    );
+
+    expect(result.symbolSize).toBe(profile.maxPayloadSize);
+    expect(result.packets[0]!.length).toBe(profile.maxPacketSize);
+
+    const frames = scheduleFrames(result.packets, result.totalGenerations);
+    const decoder = new GenerationDecoder(K, profile.maxPayloadSize);
+    const solvedGens = new Set<number>();
+
+    for (const frame of frames) {
+      const pkt = parsePacket(frame);
+      const isSystematic = pkt.header.symbolIndex < K;
+      if (isSystematic) {
+        decoder.addSystematicSymbol(pkt.header.generationIndex, pkt.payload, pkt.header.symbolIndex);
+      } else {
+        decoder.addCodedSymbol(pkt.header.generationIndex, pkt.payload, pkt.header.symbolIndex - K);
+      }
+      if (decoder.isSolved(pkt.header.generationIndex)) {
+        solvedGens.add(pkt.header.generationIndex);
+      }
+    }
+
+    expect(solvedGens.size).toBeGreaterThanOrEqual(result.sourceGenerations);
+
+    const solvedMap = new Map<number, Uint8Array[]>();
+    for (const genIdx of solvedGens) {
+      solvedMap.set(genIdx, decoder.getSourceSymbols(genIdx)!);
+    }
+
+    const recovered = assemblePayload(
+      solvedMap,
+      result.totalGenerations,
+      result.dataLength,
+      profile.maxPayloadSize,
+    );
+
+    expect(recovered).toEqual(data);
+  });
+
   it('should recover from lost frames', async () => {
     const { packetize } = await import('@/core/sender/packetizer');
     const { scheduleFrames } = await import('@/core/sender/scheduler');

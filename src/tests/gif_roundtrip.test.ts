@@ -46,10 +46,10 @@ describe('GIF Roundtrip', () => {
     for (let i = 0; i < gifData.frames.length; i++) {
       const rgba = renderGifFrame(gifData, i);
       const imageData = new ImageData(rgba, gifData.width, gifData.height);
-      const decodedBytes = decodeQRFromCanvas(imageData);
-      expect(decodedBytes, `GIF frame ${i} failed QR decode`).not.toBeNull();
+      const decodedQR = decodeQRFromCanvas(imageData);
+      expect(decodedQR, `GIF frame ${i} failed QR decode`).not.toBeNull();
 
-      const pkt = parsePacket(decodedBytes!);
+      const pkt = parsePacket(decodedQR!.bytes);
       const isSystematic = pkt.header.symbolIndex < K;
       if (isSystematic) {
         decoder.addSystematicSymbol(pkt.header.generationIndex, pkt.payload, pkt.header.symbolIndex);

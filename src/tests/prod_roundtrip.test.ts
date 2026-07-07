@@ -62,10 +62,10 @@ describe('Production Roundtrip', () => {
 
       const rgba = renderGifFrame(gifData, i);
       const imageData = new ImageData(rgba, gifData.width, gifData.height);
-      const decodedBytes = decodeQRFromCanvas(imageData);
-      if (!decodedBytes) continue;
+      const decodedQR = decodeQRFromCanvas(imageData);
+      if (!decodedQR) continue;
 
-      const pkt = parsePacket(decodedBytes);
+      const pkt = parsePacket(decodedQR.bytes);
       const isSystematic = pkt.header.symbolIndex < K;
       if (isSystematic) {
         decoder.addSystematicSymbol(pkt.header.generationIndex, pkt.payload, pkt.header.symbolIndex);

@@ -28,6 +28,7 @@ export function assemblePayload(
   solvedGenerations: Map<number, Uint8Array[]>,
   totalGenerations: number,
   dataLength: number,
+  symbolSize: number = MAX_PAYLOAD_SIZE,
 ): Uint8Array {
   if (totalGenerations === 0) {
     return new Uint8Array(0);
@@ -46,9 +47,9 @@ export function assemblePayload(
   // Build chunks from solved generations
   const receivedChunks = new Map<number, Uint8Array>();
   for (const [genIdx, symbols] of solvedGenerations) {
-    const chunk = new Uint8Array(K * MAX_PAYLOAD_SIZE);
+    const chunk = new Uint8Array(K * symbolSize);
     for (let i = 0; i < symbols.length; i++) {
-      chunk.set(symbols[i]!, i * MAX_PAYLOAD_SIZE);
+      chunk.set(symbols[i]!, i * symbolSize);
     }
     receivedChunks.set(genIdx, chunk);
   }

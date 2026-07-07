@@ -27,12 +27,13 @@ describe('Frame Decode', () => {
       const imageData = rasterizeQR(matrix, 4);
 
       // Decode QR
-      const decodedBytes = decodeQRFromCanvas(imageData);
-      expect(decodedBytes, `Frame ${i} failed to decode`).not.toBeNull();
+      const decodedQR = decodeQRFromCanvas(imageData);
+      expect(decodedQR, `Frame ${i} failed to decode`).not.toBeNull();
 
       // Parse and verify header fields match
-      const decoded = parsePacket(decodedBytes!);
+      const decoded = parsePacket(decodedQR!.bytes);
       const original = parsePacket(originalPacket);
+      expect(decodedQR!.version).toBe(QR_VERSION);
 
       expect(decoded.header.generationIndex).toBe(original.header.generationIndex);
       expect(decoded.header.symbolIndex).toBe(original.header.symbolIndex);

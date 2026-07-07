@@ -180,6 +180,8 @@ export function ReceiverPage() {
   const [hasZoomSupport, setHasZoomSupport] = useState(false);
   const [scanRateFps, setScanRateFps] = useState(DEFAULT_SCAN_RATE_FPS);
   const [decodedQrPerSecond, setDecodedQrPerSecond] = useState(0);
+  const [detectedQrVersion, setDetectedQrVersion] = useState(0);
+  const [detectedSymbolSize, setDetectedSymbolSize] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [throughputKbps, setThroughputKbps] = useState(0);
   const [solvedGens, setSolvedGens] = useState(0);
@@ -247,6 +249,8 @@ export function ReceiverPage() {
           setNeededPackets(msg.neededPackets ?? 0);
           setSolvedGens(msg.solvedGenerations ?? 0);
           setSourceGens(msg.sourceGenerations ?? 0);
+          setDetectedQrVersion(msg.qrVersion ?? 0);
+          setDetectedSymbolSize(msg.symbolSize ?? 0);
           if (msg.dataLength) {
             dataLengthRef.current = msg.dataLength;
           }
@@ -350,6 +354,8 @@ export function ReceiverPage() {
     setFramesWithQR(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
+    setDetectedQrVersion(0);
+    setDetectedSymbolSize(0);
     setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
@@ -431,6 +437,8 @@ export function ReceiverPage() {
     setFramesWithQR(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
+    setDetectedQrVersion(0);
+    setDetectedSymbolSize(0);
     setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
@@ -501,6 +509,7 @@ export function ReceiverPage() {
     setHasZoomSupport(false);
     setZoomLevel(1);
   }, []);
+
 
   // ── Capture frame from camera (software crop + optional camera zoom) ───────
   const captureFrame = useCallback(() => {
@@ -656,6 +665,9 @@ export function ReceiverPage() {
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
               </span>
               <span>
+                QR <span style={S.statValue}>{formatDetectedQR(detectedQrVersion, detectedSymbolSize)}</span>
+              </span>
+              <span>
                 decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
               </span>
               <span>
@@ -724,6 +736,9 @@ export function ReceiverPage() {
               </span>
               <span>
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
+              </span>
+              <span>
+                QR <span style={S.statValue}>{formatDetectedQR(detectedQrVersion, detectedSymbolSize)}</span>
               </span>
               <span>
                 decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
@@ -811,6 +826,12 @@ function formatDuration(ms: number): string {
   const remS = s % 60;
   if (m > 0) return `${m}m${remS.toString().padStart(2, '0')}s`;
   return `${s}s`;
+}
+
+function formatDetectedQR(version: number, symbolSize: number): string {
+  if (version > 0 && symbolSize > 0) return `V${version} · ${symbolSize} B/frame`;
+  if (version > 0) return `V${version}`;
+  return 'auto';
 }
 
 function clampScanRate(value: number): number {

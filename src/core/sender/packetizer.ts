@@ -1,10 +1,10 @@
 /**
- * Sender-side packetizer — single profile, no manifest, with outer RS.
+ * Sender-side packetizer — configurable QR profile, no manifest, with outer RS.
  *
  * Steps:
  *   1. Optional metadata wrapping (filename + mime for files)
  *   2. Optional compression (deflate-raw)
- *   3. Split preprocessed data into 201-byte symbols
+ *   3. Split preprocessed data into selected-profile symbols
  *   4. Group into G source generations of K=16 symbols each
  *   5. Apply outer Reed-Solomon to create P parity generations
  *   6. RLNC encode all G+P generations (16 systematic + 8 coded each)
@@ -28,6 +28,11 @@ export interface PacketizerResult {
   dataLength: number;
   isText: boolean;
   isCompressed: boolean;
+  symbolSize: number;
+}
+
+export interface PacketizerOptions {
+  symbolSize?: number;
 }
 
 // ─── Packetizer ──────────────────────────────────────────────────────────────
@@ -48,7 +53,10 @@ export function packetize(
   compress: boolean,
   filename?: string,
   mimeType?: string,
+  options: PacketizerOptions = {},
 ): PacketizerResult {
+  const symbolSize = normalizeSymbolSize(options.symbolSize);
+
   // 1. Optional metadata wrapping for files
   let wrapped: Uint8Array;
   if (!isText && filename) {
@@ -85,10 +93,10 @@ export function packetize(
 
   // 3. Split into fixed-size symbols
   const symbols: Uint8Array[] = [];
-  for (let offset = 0; offset < dataLength; offset += MAX_PAYLOAD_SIZE) {
-    const chunk = preprocessed.slice(offset, offset + MAX_PAYLOAD_SIZE);
-    if (chunk.length < MAX_PAYLOAD_SIZE) {
-      const padded = new Uint8Array(MAX_PAYLOAD_SIZE);
+  for (let offset = 0; offset < dataLength; offset += symbolSize) {
+    const chunk = preprocessed.slice(offset, offset + symbolSize);
+    if (chunk.length < symbolSize) {
+      const padded = new Uint8Array(symbolSize);
       padded.set(chunk);
       symbols.push(padded);
     } else {
@@ -106,10 +114,10 @@ export function packetize(
   for (let gen = 0; gen < sourceGenerations; gen++) {
     const startIdx = gen * K;
     const genSymbolsCount = Math.min(K, totalSymbols - startIdx);
-    const chunk = new Uint8Array(K * MAX_PAYLOAD_SIZE);
+    const chunk = new Uint8Array(K * symbolSize);
     for (let i = 0; i < K; i++) {
       if (i < genSymbolsCount) {
-        chunk.set(symbols[startIdx + i]!, i * MAX_PAYLOAD_SIZE);
+        chunk.set(symbols[startIdx + i]!, i * symbolSize);
       }
       // else: leave as zeros (padding)
     }
@@ -132,7 +140,7 @@ export function packetize(
     // Split chunk into K symbols
     const genSymbols: Uint8Array[] = [];
     for (let i = 0; i < K; i++) {
-      genSymbols.push(chunk.slice(i * MAX_PAYLOAD_SIZE, (i + 1) * MAX_PAYLOAD_SIZE));
+      genSymbols.push(chunk.slice(i * symbolSize, (i + 1) * symbolSize));
     }
 
     const codedSymbols = encodeGeneration(genSymbols, K, R, gen);
@@ -175,5 +183,14 @@ export function packetize(
     dataLength,
     isText,
     isCompressed,
+    symbolSize,
   };
+}
+
+function normalizeSymbolSize(value: number | undefined): number {
+  if (value === undefined) return MAX_PAYLOAD_SIZE;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new RangeError(`Invalid symbol size: ${value}`);
+  }
+  return value;
 }

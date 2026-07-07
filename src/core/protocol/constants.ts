@@ -1,8 +1,8 @@
 /**
- * Core protocol constants for the QR-over-GIF transfer system.
+ * Core protocol constants for the QR transfer system.
  *
- * Single hardcoded profile: V10, ECC M, K=16, R=8.
- * No profile selection — sender and receiver are the same codebase.
+ * Default profile: V10, ECC M, K=16, R=8. Larger QR profiles reuse the same
+ * packet header and FEC geometry with a larger per-symbol payload size.
  *
  * @module
  */

@@ -6,6 +6,7 @@
  */
 
 import { generateQRMatrix } from '@/core/qr/qr_encode';
+import type { EccLevel } from '@/core/qr/qr_encode';
 import { rasterizeQR } from '@/core/qr/frame_raster';
 import { createQRGif } from '@/core/gif/gif_render';
 import { QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@/core/protocol/constants';
@@ -16,6 +17,8 @@ interface GenerateInput {
   type: 'generate';
   packets: Uint8Array[];
   frameDelayMs?: number;
+  qrVersion?: number;
+  eccLevel?: EccLevel;
 }
 
 interface GifOutput {
@@ -48,8 +51,10 @@ self.onmessage = (e: MessageEvent<GenerateInput>) => {
 function handleGenerate(input: GenerateInput): GifOutput {
   const { packets } = input;
   const frameDelayMs = normalizeFrameDelayMs(input.frameDelayMs);
+  const qrVersion = normalizeQRVersion(input.qrVersion);
+  const eccLevel = normalizeEccLevel(input.eccLevel);
 
-  const moduleCount = QR_VERSION * 4 + 17;
+  const moduleCount = qrVersion * 4 + 17;
 
   // Determine optimal scale: aim for ~300-400 px width
   const targetPx = 360;
@@ -64,7 +69,7 @@ function handleGenerate(input: GenerateInput): GifOutput {
 
   for (let i = 0; i < packets.length; i++) {
     const packet = packets[i]!;
-    const matrix = generateQRMatrix(packet, QR_VERSION, ECC_LEVEL);
+    const matrix = generateQRMatrix(packet, qrVersion, eccLevel);
     const imageData = rasterizeQR(matrix, scale);
     if (i === 0) {
       width = imageData.width;
@@ -88,4 +93,16 @@ function handleGenerate(input: GenerateInput): GifOutput {
 function normalizeFrameDelayMs(value: number | undefined): number {
   if (!Number.isFinite(value)) return FRAME_DELAY_MS;
   return Math.min(500, Math.max(17, Math.round(value!)));
+}
+
+function normalizeQRVersion(value: number | undefined): number {
+  if (value === undefined) return QR_VERSION;
+  if (!Number.isInteger(value) || value < 1 || value > 40) {
+    throw new RangeError(`Invalid QR version: ${value}`);
+  }
+  return value;
+}
+
+function normalizeEccLevel(value: EccLevel | undefined): EccLevel {
+  return value ?? ECC_LEVEL;
 }
