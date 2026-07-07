@@ -12,6 +12,7 @@
  * @module
  */
 
+import { GF256_RS_MAX_EVALUATION_POINTS } from '@/core/protocol/constants';
 import { add, sub, mul, div, inv, pow } from './gf256';
 
 const PRIMITIVE = 2; // α = 0x02
@@ -49,6 +50,7 @@ export function encodeOuterRS(sourceChunks: Uint8Array[], parityCount: number): 
   const G = sourceChunks.length;
   const P = parityCount;
   if (P === 0 || G === 0) return [];
+  assertSafeEvaluationPointCount(G, P);
 
   const symbolSize = sourceChunks[0]!.length;
   const sourcePoints = Array.from({ length: G }, (_, i) => fastEvalPoint(i));
@@ -102,6 +104,9 @@ export function decodeOuterRS(
   const G = totalSource;
   const P = parityCount;
   const total = G + P;
+  if (P > 0) {
+    assertSafeEvaluationPointCount(G, P);
+  }
 
   // Determine which source generations are present/missing
   const presentSource: number[] = [];
@@ -209,7 +214,11 @@ function invertMatrix(matrix: number[][]): number[][] {
   const n = matrix.length;
   if (n === 0) return [];
   if (n === 1) {
-    const invVal = inv(matrix[0]![0]!);
+    const value = matrix[0]![0]!;
+    if (value === 0) {
+      throw new Error('Singular matrix in outer RS decode');
+    }
+    const invVal = inv(value);
     return [[invVal]];
   }
 
@@ -266,4 +275,14 @@ function invertMatrix(matrix: number[][]): number[][] {
     invMatrix.push(aug[i]!.slice(n, 2 * n));
   }
   return invMatrix;
+}
+
+function assertSafeEvaluationPointCount(sourceCount: number, parityCount: number): void {
+  const totalPoints = sourceCount + parityCount;
+  if (totalPoints > GF256_RS_MAX_EVALUATION_POINTS) {
+    throw new RangeError(
+      `Outer RS over GF(256) supports at most ${GF256_RS_MAX_EVALUATION_POINTS} ` +
+      `source+parity generations, got ${totalPoints}.`,
+    );
+  }
 }

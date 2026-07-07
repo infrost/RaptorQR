@@ -10,8 +10,11 @@ import type { EccLevel } from '@/core/qr/qr_encode';
 import { rasterizeQR } from '@/core/qr/frame_raster';
 import { createQRGif } from '@/core/gif/gif_render';
 import { QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@/core/protocol/constants';
-
-type ParallelQRCount = 1 | 2 | 4;
+import {
+  stripedFrameCount,
+  stripedPacketIndex,
+  type ParallelQRCount,
+} from '@/core/sender/parallel_striping';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -72,15 +75,15 @@ function handleGenerate(input: GenerateInput): GifOutput {
   const frames: Uint8Array[] = [];
   const width = tileSize * layout.columns;
   const height = tileSize * layout.rows;
-  const frameCount = packets.length;
+  const frameCount = stripedFrameCount(packets.length, parallelCount);
 
   for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
     const composite = new Uint8ClampedArray(width * height * 4);
     composite.fill(255);
 
     for (let tileIndex = 0; tileIndex < parallelCount; tileIndex++) {
-      const laneOffset = Math.floor(tileIndex * packets.length / parallelCount);
-      const packetIndex = (frameIndex + laneOffset) % packets.length;
+      const packetIndex = stripedPacketIndex(packets.length, parallelCount, frameIndex, tileIndex);
+      if (packetIndex === null) continue;
       const matrix = generateQRMatrix(packets[packetIndex]!, qrVersion, eccLevel);
       const imageData = rasterizeQR(matrix, scale);
       const x = (tileIndex % layout.columns) * tileSize;

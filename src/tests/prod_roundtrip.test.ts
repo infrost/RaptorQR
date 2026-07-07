@@ -12,6 +12,7 @@ import { decodeQRFromCanvas } from '@/core/qr/qr_decode';
 import { parsePacket } from '@/core/protocol/packet';
 import { GenerationDecoder } from '@/core/fec/rlnc_decoder';
 import { assemblePayload } from '@/core/reconstruct/assemble';
+import { inflateSync } from 'fflate';
 import {
   K,
   MAX_PAYLOAD_SIZE,
@@ -26,7 +27,6 @@ describe('Production Roundtrip', () => {
     crypto.getRandomValues(payload);
 
     const result = packetize(payload, false, true);
-    expect(result.isCompressed).toBe(true);
 
     const frames = scheduleFrames(result.packets, result.totalGenerations);
 
@@ -84,10 +84,9 @@ describe('Production Roundtrip', () => {
       solvedMap.set(genIdx, decoder.getSourceSymbols(genIdx)!);
     }
 
-    const { inflateSync } = await import('fflate');
     const assembled = assemblePayload(solvedMap, result.totalGenerations, result.dataLength);
-    const decompressed = inflateSync(assembled);
+    const recovered = result.isCompressed ? inflateSync(assembled) : assembled;
 
-    expect(decompressed).toEqual(payload);
+    expect(recovered).toEqual(payload);
   });
 });

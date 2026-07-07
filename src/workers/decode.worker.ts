@@ -12,7 +12,7 @@ import {
 } from '@/core/qr/qr_decode';
 import { parsePacket } from '@/core/protocol/packet';
 import type { Packet } from '@/core/protocol/packet';
-import { K, sourceGenerationsFromTotal } from '@/core/protocol/constants';
+import { K, sourceGenerationsFromDataLength } from '@/core/protocol/constants';
 import { GenerationDecoder } from '@/core/fec/rlnc_decoder';
 import { assemblePayload } from '@/core/reconstruct/assemble';
 
@@ -157,8 +157,8 @@ function processDecodedPacket(
 
   // Start fresh on first valid packet
   if (!current) {
-    const sourceGens = sourceGenerationsFromTotal(h.totalGenerations);
     const symbolSize = packet.payload.length;
+    const sourceGens = sourceGenerationsFromDataLength(h.dataLength, symbolSize);
     current = {
       decoder: new GenerationDecoder(K, symbolSize),
       dedup: new Set(),
@@ -191,8 +191,8 @@ function processDecodedPacket(
 
   // Update metadata from header
   current.totalGenerations = h.totalGenerations;
-  current.sourceGenerations = sourceGenerationsFromTotal(h.totalGenerations);
   current.dataLength = h.dataLength;
+  current.sourceGenerations = sourceGenerationsFromDataLength(h.dataLength, current.symbolSize);
   current.qrVersion = decoded.version;
   current.isText = h.isText;
   current.isCompressed = h.compressed;
@@ -336,12 +336,16 @@ function reconstructData(state: DecodeState): void {
 function reportProgress(state: DecodeState): void {
   const totalGens = state.totalGenerations;
   const solvedGens = state.solvedGenerations.size;
-  const needed = state.totalGenerations > 0 ? K * state.totalGenerations : 0;
+  const decodedPackets = state.stats.framesWithQR;
+  const uniquePackets = state.dedup.size;
+  const needed = state.sourceGenerations > 0 ? K * state.sourceGenerations : 0;
 
   self.postMessage({
     type: 'progress',
     totalFrames: state.stats.totalFrames,
-    framesWithQR: state.stats.framesWithQR,
+    framesWithQR: decodedPackets,
+    uniquePackets,
+    duplicatePackets: Math.max(0, decodedPackets - uniquePackets),
     acceptedPackets: state.stats.acceptedPackets,
     neededPackets: needed,
     receivedPackets: state.receivedPackets,

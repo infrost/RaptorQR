@@ -82,8 +82,14 @@ export function packetize(
   let isCompressed: boolean;
 
   if (compress && wrapped.length > 64) {
-    preprocessed = deflateSync(wrapped);
-    isCompressed = true;
+    const compressed = deflateSync(wrapped);
+    if (compressed.length < wrapped.length) {
+      preprocessed = compressed;
+      isCompressed = true;
+    } else {
+      preprocessed = new Uint8Array(wrapped);
+      isCompressed = false;
+    }
   } else {
     preprocessed = new Uint8Array(wrapped);
     isCompressed = false;

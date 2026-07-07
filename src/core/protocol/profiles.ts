@@ -20,12 +20,19 @@ export interface QRTransferProfile {
 
 const PROFILE_SPECS: Array<{ version: number; eccLevel: EccLevel }> = [
   { version: QR_VERSION, eccLevel: ECC_LEVEL },
+  { version: QR_VERSION, eccLevel: 'L' },
   { version: 15, eccLevel: 'M' },
+  { version: 15, eccLevel: 'L' },
   { version: 20, eccLevel: 'M' },
+  { version: 20, eccLevel: 'L' },
   { version: 25, eccLevel: 'M' },
+  { version: 25, eccLevel: 'L' },
   { version: 30, eccLevel: 'M' },
+  { version: 30, eccLevel: 'L' },
   { version: 35, eccLevel: 'M' },
+  { version: 35, eccLevel: 'L' },
   { version: 40, eccLevel: 'M' },
+  { version: 40, eccLevel: 'L' },
 ];
 
 const DEFAULT_PROFILE_VERSION = 20;

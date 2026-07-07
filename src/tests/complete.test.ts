@@ -332,6 +332,14 @@ describe('Outer Reed-Solomon', () => {
 
     expect(() => decodeOuterRS(received, 2, 1)).toThrow('Cannot recover');
   });
+
+  it('should reject RS blocks beyond the GF(256) evaluation point limit', async () => {
+    const { encodeOuterRS } = await import('@/core/fec/outer_rs');
+
+    const chunks = Array.from({ length: 255 }, () => new Uint8Array([1]));
+
+    expect(() => encodeOuterRS(chunks, 1)).toThrow('supports at most 255');
+  });
 });
 
 // ─── Payload Assembly ──────────────────────────────────────────────────────────
@@ -404,7 +412,8 @@ describe('Payload Assembly', () => {
     solved.set(0, g0);
 
     // 4 source gens + 0 parity = 4 total, but only 1 solved
-    expect(() => assemblePayload(solved, 4, 3)).toThrow('only 1 generations solved');
+    const dataLength = K * MAX_PAYLOAD_SIZE * 4;
+    expect(() => assemblePayload(solved, 4, dataLength)).toThrow('only 1 generations solved');
   });
 });
 
@@ -469,6 +478,44 @@ describe('Packetizer', () => {
 
     expect(result.isCompressed).toBe(true);
     expect(result.dataLength).toBeLessThan(data.length);
+  });
+
+  it('should skip compression when it does not reduce payload size', async () => {
+    const { packetize } = await import('@/core/sender/packetizer');
+
+    let state = 0x12345678;
+    const data = new Uint8Array(4096);
+    for (let i = 0; i < data.length; i++) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      data[i] = state & 0xff;
+    }
+
+    const result = packetize(data, false, true);
+
+    expect(result.isCompressed).toBe(false);
+    expect(result.dataLength).toBe(data.length);
+  });
+
+  it('should not generate unsafe outer RS parity for very large files', async () => {
+    const { packetize } = await import('@/core/sender/packetizer');
+    const {
+      GF256_RS_MAX_EVALUATION_POINTS,
+      K,
+      MAX_PAYLOAD_SIZE,
+      parityCount,
+    } = await import('@/core/protocol/constants');
+
+    const sourceGenerations = GF256_RS_MAX_EVALUATION_POINTS + 5;
+    const data = new Uint8Array(sourceGenerations * K * MAX_PAYLOAD_SIZE);
+    for (let i = 0; i < data.length; i++) data[i] = i & 0xff;
+
+    const result = packetize(data, false, false);
+
+    expect(result.sourceGenerations).toBe(sourceGenerations);
+    expect(parityCount(result.sourceGenerations)).toBe(0);
+    expect(result.totalGenerations).toBe(result.sourceGenerations);
   });
 });
 

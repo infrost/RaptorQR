@@ -11,6 +11,7 @@ import { parsePacket } from '@/core/protocol/packet';
 import { GenerationDecoder } from '@/core/fec/rlnc_decoder';
 import { assemblePayload } from '@/core/reconstruct/assemble';
 import { K, MAX_PAYLOAD_SIZE } from '@/core/protocol/constants';
+import { inflateSync } from 'fflate';
 
 describe('Outer EC Benefit', () => {
   it('should succeed with outer EC when a source generation is lost, while without EC fails', async () => {
@@ -76,10 +77,9 @@ describe('Outer EC Benefit', () => {
     for (const genIdx of solvedWithEC) {
       solvedMap.set(genIdx, decoderWithEC.getSourceSymbols(genIdx)!);
     }
-    const { inflateSync } = await import('fflate');
     const assembled = assemblePayload(solvedMap, result.totalGenerations, result.dataLength);
-    const decompressed = inflateSync(assembled);
-    expect(decompressed).toEqual(payload);
+    const recovered = result.isCompressed ? inflateSync(assembled) : assembled;
+    expect(recovered).toEqual(payload);
 
     console.log('Outer EC benefit:', {
       payloadBytes: payload.length,

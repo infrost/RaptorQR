@@ -11,6 +11,16 @@ describe('QR encode', () => {
     expect(getMaxByteCapacity(40, 'M')).toBeGreaterThan(2000);
   });
 
+  it('should expose low-ECC transfer profiles with more payload room', async () => {
+    const { getQRTransferProfile } = await import('@/core/protocol/profiles');
+
+    const medium = getQRTransferProfile('v20-m');
+    const low = getQRTransferProfile('v20-l');
+
+    expect(low.maxPayloadSize).toBeGreaterThan(medium.maxPayloadSize);
+    expect(low.version).toBe(medium.version);
+  });
+
   it('should throw on data too large', () => {
     expect(() => generateQRMatrix(new Uint8Array(100), 1, 'L')).toThrow();
   });
@@ -95,5 +105,32 @@ describe('GIF render', () => {
   it('estimateGifSize returns reasonable value', () => {
     const size = estimateGifSize(100000, 'V31-Q');
     expect(size).toBeGreaterThan(0);
+  });
+});
+
+describe('Parallel striping', () => {
+  it('should assign each packet once per loop and leave incomplete tail tiles empty', async () => {
+    const { stripedFrameCount, stripedPacketIndex } = await import('@/core/sender/parallel_striping');
+
+    const packetCount = 10;
+    const parallelCount = 4;
+    const frameCount = stripedFrameCount(packetCount, parallelCount);
+    const seen: number[] = [];
+    let emptyTiles = 0;
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      for (let tileIndex = 0; tileIndex < parallelCount; tileIndex++) {
+        const packetIndex = stripedPacketIndex(packetCount, parallelCount, frameIndex, tileIndex);
+        if (packetIndex === null) {
+          emptyTiles++;
+        } else {
+          seen.push(packetIndex);
+        }
+      }
+    }
+
+    expect(frameCount).toBe(3);
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(emptyTiles).toBe(2);
   });
 });

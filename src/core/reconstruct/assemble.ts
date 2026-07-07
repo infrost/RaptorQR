@@ -9,7 +9,12 @@
  * @module
  */
 
-import { sourceGenerationsFromTotal, parityCount, K, MAX_PAYLOAD_SIZE } from '@/core/protocol/constants';
+import {
+  sourceGenerationsFromDataLength,
+  parityCount,
+  K,
+  MAX_PAYLOAD_SIZE,
+} from '@/core/protocol/constants';
 import { decodeOuterRS } from '@/core/fec/outer_rs';
 
 /**
@@ -34,8 +39,15 @@ export function assemblePayload(
     return new Uint8Array(0);
   }
 
-  const sourceGens = sourceGenerationsFromTotal(totalGenerations);
-  const P = parityCount(sourceGens);
+  const sourceGens = sourceGenerationsFromDataLength(dataLength, symbolSize);
+  const expectedParity = parityCount(sourceGens);
+  const P = totalGenerations - sourceGens;
+  if (P < 0 || P !== expectedParity) {
+    throw new Error(
+      `assemblePayload: inconsistent generation metadata; expected ` +
+      `${sourceGens + expectedParity} total generations, got ${totalGenerations}`,
+    );
+  }
 
   if (solvedGenerations.size < sourceGens) {
     throw new Error(

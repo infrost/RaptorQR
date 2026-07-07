@@ -10,11 +10,15 @@ import {
   QR_TRANSFER_PROFILES,
   type QRTransferProfile,
 } from '@/core/protocol/profiles';
+import {
+  stripedFrameCount,
+  stripedPacketIndex,
+  type ParallelQRCount,
+} from '@/core/sender/parallel_striping';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type InputMode = 'text' | 'file';
-type ParallelQRCount = 1 | 2 | 4;
 
 interface GifResult {
   gifData: ArrayBuffer;
@@ -116,14 +120,14 @@ const S = {
     minHeight: 120,
   },
   preview: {
-    background: '#000',
+    background: '#fff',
     borderRadius: 8,
     imageRendering: 'pixelated' as const,
     maxWidth: '100%',
     display: 'block',
   } as CSSProps,
   qrStage: (fullscreen: boolean): CSSProps => ({
-    background: '#000',
+    background: '#fff',
     borderRadius: fullscreen ? 0 : 8,
     display: 'flex',
     alignItems: 'center',
@@ -735,7 +739,7 @@ function createLiveTransfer(
     eccLevel: profile.eccLevel,
     symbolSize: profile.maxPayloadSize,
     scale,
-    displayFrameCount: packets.length,
+    displayFrameCount: stripedFrameCount(packets.length, parallelCount),
     parallelCount,
   };
 }
@@ -758,6 +762,7 @@ function drawLiveFrame(
 
   for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
     const packetIndex = getPacketIndexForDisplayFrame(transfer, frameIndex, tileIndex);
+    if (packetIndex === null) continue;
     const image = getLivePacketImage(transfer, packetIndex, cache);
     const x = (tileIndex % transfer.columns) * transfer.tileWidth;
     const y = Math.floor(tileIndex / transfer.columns) * transfer.tileHeight;
@@ -803,7 +808,11 @@ function getPacketIndexForDisplayFrame(
   transfer: LiveTransfer,
   frameIndex: number,
   tileIndex: number,
-): number {
-  const laneOffset = Math.floor(tileIndex * transfer.packets.length / transfer.parallelCount);
-  return (frameIndex + laneOffset) % transfer.packets.length;
+): number | null {
+  return stripedPacketIndex(
+    transfer.packets.length,
+    transfer.parallelCount,
+    frameIndex,
+    tileIndex,
+  );
 }

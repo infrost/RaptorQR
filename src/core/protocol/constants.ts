@@ -65,24 +65,22 @@ export const FRAME_DELAY_MS = 200;
 /** Fraction of extra parity generations (3%). */
 export const OUTER_EC_OVERHEAD = 0.03;
 
+/** GF(256) Reed-Solomon can use at most 255 distinct non-zero eval points. */
+export const GF256_RS_MAX_EVALUATION_POINTS = 255;
+
 /** Compute number of parity generations for G source generations. */
 export function parityCount(sourceGenerations: number): number {
-  return Math.floor(sourceGenerations * OUTER_EC_OVERHEAD);
+  if (sourceGenerations <= 0) return 0;
+  const requestedParity = Math.floor(sourceGenerations * OUTER_EC_OVERHEAD);
+  const maxSafeParity = Math.max(0, GF256_RS_MAX_EVALUATION_POINTS - sourceGenerations);
+  return Math.min(requestedParity, maxSafeParity);
 }
 
-/** Compute source generation count from total generations. */
-export function sourceGenerationsFromTotal(totalGenerations: number): number {
-  if (totalGenerations <= 1) return totalGenerations;
-  let lo = 1;
-  let hi = totalGenerations;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const p = parityCount(mid);
-    if (mid + p < totalGenerations) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
+/** Compute source generation count from the exact encoded payload size. */
+export function sourceGenerationsFromDataLength(dataLength: number, symbolSize: number): number {
+  if (!Number.isInteger(symbolSize) || symbolSize <= 0) {
+    throw new RangeError(`Invalid symbol size: ${symbolSize}`);
   }
-  return lo;
+  const totalSymbols = Math.max(1, Math.ceil(Math.max(0, dataLength) / symbolSize));
+  return Math.max(1, Math.ceil(totalSymbols / K));
 }

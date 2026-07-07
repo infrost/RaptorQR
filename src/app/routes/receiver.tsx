@@ -171,6 +171,8 @@ export function ReceiverPage() {
   const [status, setStatus] = useState('');
   const [totalFrames, setTotalFrames] = useState(0);
   const [framesWithQR, setFramesWithQR] = useState(0);
+  const [uniquePackets, setUniquePackets] = useState(0);
+  const [duplicatePackets, setDuplicatePackets] = useState(0);
   const [acceptedPackets, setAcceptedPackets] = useState(0);
   const [neededPackets, setNeededPackets] = useState(0);
   const [receivedFile, setReceivedFile] = useState<ReceivedFile | null>(null);
@@ -244,6 +246,8 @@ export function ReceiverPage() {
           setTotalFrames(msg.totalFrames ?? 0);
           const decodedQrCount = msg.framesWithQR ?? 0;
           setFramesWithQR(decodedQrCount);
+          setUniquePackets(msg.uniquePackets ?? 0);
+          setDuplicatePackets(msg.duplicatePackets ?? 0);
           updateDecodedQrRate(decodedQrCount);
           setAcceptedPackets(msg.acceptedPackets ?? 0);
           setNeededPackets(msg.neededPackets ?? 0);
@@ -352,6 +356,8 @@ export function ReceiverPage() {
     setReceivedText('');
     setTotalFrames(0);
     setFramesWithQR(0);
+    setUniquePackets(0);
+    setDuplicatePackets(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
     setDetectedQrVersion(0);
@@ -429,6 +435,8 @@ export function ReceiverPage() {
     setReceivedText('');
     setTotalFrames(0);
     setFramesWithQR(0);
+    setUniquePackets(0);
+    setDuplicatePackets(0);
     setAcceptedPackets(0);
     setNeededPackets(0);
     setDetectedQrVersion(0);
@@ -637,11 +645,22 @@ export function ReceiverPage() {
           {scanning && (
             <div style={S.statsBar}>
               <span>
-                QRs{' '}
+                decoded{' '}
                 <span style={S.statValue}>
-                  {framesWithQR}/{acceptedPackets}/{neededPackets || '?'}
+                  {framesWithQR}
                 </span>
               </span>
+              <span>
+                unique <span style={S.statValue}>{uniquePackets}</span>
+              </span>
+              <span>
+                useful <span style={S.statValue}>{acceptedPackets}/{neededPackets || '?'}</span>
+              </span>
+              {duplicatePackets > 0 && (
+                <span>
+                  dupes <span style={S.statValue}>{duplicatePackets}</span>
+                </span>
+              )}
               <span>
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
               </span>
@@ -710,11 +729,22 @@ export function ReceiverPage() {
           {scanning && (
             <div style={S.statsBar}>
               <span>
-                QRs{' '}
+                decoded{' '}
                 <span style={S.statValue}>
-                  {framesWithQR}/{acceptedPackets}/{neededPackets || '?'}
+                  {framesWithQR}
                 </span>
               </span>
+              <span>
+                unique <span style={S.statValue}>{uniquePackets}</span>
+              </span>
+              <span>
+                useful <span style={S.statValue}>{acceptedPackets}/{neededPackets || '?'}</span>
+              </span>
+              {duplicatePackets > 0 && (
+                <span>
+                  dupes <span style={S.statValue}>{duplicatePackets}</span>
+                </span>
+              )}
               <span>
                 gens <span style={S.statValue}>{solvedGens}/{sourceGens}</span>
               </span>
