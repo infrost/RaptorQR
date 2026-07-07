@@ -74,7 +74,7 @@ const MAX_FRAME_RATE_FPS = 60;
 const DEFAULT_FRAME_RATE_FPS = 30;
 const DEFAULT_PARALLEL_QR_COUNT: ParallelQRCount = 1;
 const PARALLEL_QR_COUNTS: ParallelQRCount[] = [1, 2, 4];
-const FEC_CODEC_OPTIONS: FecCodec[] = ['js-rlnc', 'wasm-raptorq'];
+const FEC_CODEC_OPTIONS: FecCodec[] = ['wasm-raptorq', 'js-rlnc'];
 const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
 const FRAME_CACHE_LIMIT = 120;
@@ -232,7 +232,8 @@ export function SenderPage() {
   const [mode, setMode] = useState<InputMode>('text');
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [encodingLive, setEncodingLive] = useState(false);
+  const [preparingGif, setPreparingGif] = useState(false);
   const [status, setStatus] = useState('');
   const [qrVersion, setQrVersion] = useState<QRVersionOption>(DEFAULT_QR_VERSION);
   const [eccLevel, setEccLevel] = useState<EccLevel>(DEFAULT_QR_ECC_LEVEL);
@@ -256,10 +257,13 @@ export function SenderPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const qrStageRef = useRef<HTMLDivElement | null>(null);
   const liveTransferRef = useRef<LiveTransfer | null>(null);
+  const encodeWorkerRef = useRef<Worker | null>(null);
+  const gifWorkerRef = useRef<Worker | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const liveFrameIndexRef = useRef(0);
   const frameRateFpsRef = useRef(DEFAULT_FRAME_RATE_FPS);
   const frameCacheRef = useRef<FrameCache>(createFrameCache());
+  const runIdRef = useRef(0);
   const qrProfile = createQRTransferProfile(qrVersion, eccLevel);
   const frameDelayMs = frameRateToDelayMs(frameRateFps);
 
@@ -268,6 +272,16 @@ export function SenderPage() {
       window.clearTimeout(playbackTimerRef.current);
       playbackTimerRef.current = null;
     }
+  }, []);
+
+  const terminateEncodeWorker = useCallback(() => {
+    encodeWorkerRef.current?.terminate();
+    encodeWorkerRef.current = null;
+  }, []);
+
+  const terminateGifWorker = useCallback(() => {
+    gifWorkerRef.current?.terminate();
+    gifWorkerRef.current = null;
   }, []);
 
   const scheduleNextLiveFrame = useCallback(() => {
@@ -335,6 +349,9 @@ export function SenderPage() {
 
   /** Wipe all output state and stop any live playback loop. */
   const resetOutput = useCallback(() => {
+    runIdRef.current++;
+    terminateEncodeWorker();
+    terminateGifWorker();
     clearPlaybackTimer();
     liveTransferRef.current = null;
     liveFrameIndexRef.current = 0;
@@ -342,9 +359,16 @@ export function SenderPage() {
     setLiveTransfer(null);
     setGifResult(null);
     setStats(null);
+    setEncodingLive(false);
+    setPreparingGif(false);
     setError('');
     setStatus('');
-  }, [clearPlaybackTimer]);
+  }, [clearPlaybackTimer, terminateEncodeWorker, terminateGifWorker]);
+
+  const handleStopTransfer = useCallback(() => {
+    resetOutput();
+    setStatus('Stopped.');
+  }, [resetOutput]);
 
   const handleModeChange = useCallback((newMode: InputMode) => {
     setMode(newMode);
@@ -353,10 +377,10 @@ export function SenderPage() {
 
   const handleTextChange = useCallback((value: string) => {
     setText(value);
-    if (liveTransfer || gifResult || stats) {
+    if (liveTransfer || gifResult || stats || encodingLive || preparingGif) {
       resetOutput();
     }
-  }, [resetOutput, liveTransfer, gifResult, stats]);
+  }, [resetOutput, liveTransfer, gifResult, stats, encodingLive, preparingGif]);
 
   const handleFile = useCallback((e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -399,8 +423,9 @@ export function SenderPage() {
     resetOutput();
   }, [resetOutput]);
 
-  const handleGenerate = useCallback(async () => {
+  const handleStartLiveTransfer = useCallback(async () => {
     resetOutput();
+    const runId = runIdRef.current;
 
     let data: ArrayBuffer;
     let isText: boolean;
@@ -420,15 +445,17 @@ export function SenderPage() {
     const compress = data.byteLength > 64;
     const selectedQRProfile = createQRTransferProfile(qrVersion, eccLevel);
 
-    setBusy(true);
-    setStatus('Encoding data…');
+    setEncodingLive(true);
+    setStatus('Encoding live QR…');
+
+    let encodeWorker: Worker | null = null;
 
     try {
-      // ── Step 1: Encode worker ─────────────────────────────────────
-      const encodeWorker = new Worker(
+      encodeWorker = new Worker(
         new URL('@/workers/encode.worker.ts', import.meta.url),
         { type: 'module' },
       );
+      encodeWorkerRef.current = encodeWorker;
 
       const encoded = await new Promise<{
         packets: Uint8Array[];
@@ -460,7 +487,8 @@ export function SenderPage() {
           [data],
         );
       });
-      encodeWorker.terminate();
+
+      if (runId !== runIdRef.current) return;
 
       setStats({
         originalSize: encoded.stats.originalSize,
@@ -478,16 +506,48 @@ export function SenderPage() {
       setLiveTransfer(nextLiveTransfer);
       setStatus(
         `Live QR running (${encoded.stats.frameCount} packets, ` +
-        `${nextLiveTransfer.parallelCount} per tick). Preparing GIF download…`,
+        `${nextLiveTransfer.parallelCount} per tick).`,
       );
+    } catch (err: any) {
+      if (runId === runIdRef.current) {
+        setError(err.message ?? String(err));
+      }
+    } finally {
+      if (encodeWorker) {
+        encodeWorker.terminate();
+      }
+      if (encodeWorkerRef.current === encodeWorker) {
+        encodeWorkerRef.current = null;
+      }
+      if (runId === runIdRef.current) {
+        setEncodingLive(false);
+      }
+    }
+  }, [mode, text, file, resetOutput, qrVersion, eccLevel, fecCodec, raptorqRepairPercent, parallelQRCount]);
 
-      // ── Step 2: GIF worker ─────────────────────────────────────────
+  const handlePrepareGif = useCallback(async () => {
+    const transfer = liveTransferRef.current;
+    if (!transfer) {
+      setError('Start a live QR transfer before preparing a GIF.');
+      return;
+    }
+
+    const runId = runIdRef.current;
+    setPreparingGif(true);
+    setGifResult(null);
+    setError('');
+    setStatus('Preparing GIF export…');
+
+    let gifWorker: Worker | null = null;
+
+    try {
       const outputFrameRateFps = frameRateFpsRef.current;
       const outputFrameDelayMs = Math.round(frameRateToDelayMs(outputFrameRateFps));
-      const gifWorker = new Worker(
+      gifWorker = new Worker(
         new URL('@/workers/gif.worker.ts', import.meta.url),
         { type: 'module' },
       );
+      gifWorkerRef.current = gifWorker;
 
       const gif = await new Promise<GifResult>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('GIF worker timed out')), 120_000);
@@ -501,7 +561,7 @@ export function SenderPage() {
               frameCount: e.data.frameCount,
               frameRateFps: outputFrameRateFps,
               frameDelayMs: outputFrameDelayMs,
-              parallelCount: parallelQRCount,
+              parallelCount: transfer.parallelCount,
             });
           } else if (e.data.type === 'error') {
             reject(new Error(e.data.message));
@@ -511,25 +571,35 @@ export function SenderPage() {
         gifWorker.postMessage(
           {
             type: 'generate',
-            packets: encoded.packets,
+            packets: transfer.packets,
             frameDelayMs: outputFrameDelayMs,
-            qrVersion: selectedQRProfile.version,
-            eccLevel: selectedQRProfile.eccLevel,
-            parallelCount: parallelQRCount,
+            qrVersion: transfer.version,
+            eccLevel: transfer.eccLevel,
+            parallelCount: transfer.parallelCount,
           },
         );
       });
-      gifWorker.terminate();
 
-      // ── Step 3: show result ────────────────────────────────────────
+      if (runId !== runIdRef.current) return;
+
       setGifResult(gif);
-      setStatus('Done ✓');
+      setStatus('GIF ready.');
     } catch (err: any) {
-      setError(err.message ?? String(err));
+      if (runId === runIdRef.current) {
+        setError(err.message ?? String(err));
+      }
     } finally {
-      setBusy(false);
+      if (gifWorker) {
+        gifWorker.terminate();
+      }
+      if (gifWorkerRef.current === gifWorker) {
+        gifWorkerRef.current = null;
+      }
+      if (runId === runIdRef.current) {
+        setPreparingGif(false);
+      }
     }
-  }, [mode, text, file, resetOutput, qrVersion, eccLevel, fecCodec, raptorqRepairPercent, parallelQRCount]);
+  }, []);
 
   const handleDownload = useCallback(() => {
     if (!gifResult) return;
@@ -599,7 +669,7 @@ export function SenderPage() {
           <select
             value={qrVersion}
             style={S.select}
-            disabled={busy}
+            disabled={encodingLive}
             onChange={(e) => handleQRVersionChange((e.target as HTMLSelectElement).value)}
           >
             {QR_VERSION_OPTIONS.map((version) => {
@@ -620,7 +690,7 @@ export function SenderPage() {
           <select
             value={eccLevel}
             style={S.select}
-            disabled={busy}
+            disabled={encodingLive}
             onChange={(e) => handleEccLevelChange((e.target as HTMLSelectElement).value)}
           >
             {ECC_LEVEL_OPTIONS.map((level) => {
@@ -641,7 +711,7 @@ export function SenderPage() {
           <select
             value={fecCodec}
             style={S.select}
-            disabled={busy}
+            disabled={encodingLive}
             onChange={(e) => handleFecCodecChange((e.target as HTMLSelectElement).value)}
           >
             {FEC_CODEC_OPTIONS.map((codec) => (
@@ -664,7 +734,7 @@ export function SenderPage() {
               step={1}
               value={raptorqRepairPercent}
               style={S.slider}
-              disabled={busy}
+              disabled={encodingLive}
               onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
             />
             <div style={S.sliderLabels}>
@@ -700,7 +770,7 @@ export function SenderPage() {
           <select
             value={parallelQRCount}
             style={S.select}
-            disabled={busy}
+            disabled={encodingLive}
             onChange={(e) => handleParallelQRCountChange((e.target as HTMLSelectElement).value)}
           >
             {PARALLEL_QR_COUNTS.map((count) => (
@@ -710,20 +780,28 @@ export function SenderPage() {
             ))}
           </select>
         </div>
-        <button
-          style={busy ? { ...S.btn, opacity: 0.6, cursor: 'not-allowed' } : S.btn}
-          disabled={busy}
-          onClick={handleGenerate}
-        >
-          {busy ? (
-            <>
-              <span style={S.spinner} />
-              {status || 'Processing…'}
-            </>
-          ) : (
-            'Start Transfer'
+        <div style={S.row}>
+          <button
+            style={encodingLive ? { ...S.btn, opacity: 0.6, cursor: 'not-allowed' } : S.btn}
+            disabled={encodingLive}
+            onClick={handleStartLiveTransfer}
+          >
+            {encodingLive ? (
+              <>
+                <span style={S.spinner} />
+                Encoding live QR…
+              </>
+            ) : (
+              'Start Live QR'
+            )}
+          </button>
+          {(liveTransfer || preparingGif) && (
+            <button style={S.btnSecondary} onClick={handleStopTransfer}>
+              Stop
+            </button>
           )}
-        </button>
+        </div>
+        {status && <div style={{ ...S.infoValue, marginTop: 10 }}>{status}</div>}
         {error && <div style={S.warn}>⚠ {error}</div>}
       </div>
 
@@ -744,15 +822,28 @@ export function SenderPage() {
             <button style={S.btnSecondary} onClick={handleFullscreenPlayback}>
               Fullscreen QR
             </button>
-            <button
-              style={gifResult ? S.btn : { ...S.btnSecondary, opacity: 0.6, cursor: 'not-allowed' }}
-              disabled={!gifResult}
-              onClick={handleDownload}
-            >
-              {gifResult
-                ? `⬇ Download GIF (${Math.round(gifResult.gifData.byteLength / 1024)} KB)`
-                : 'Preparing GIF export…'}
+            <button style={S.btnSecondary} onClick={handleStopTransfer}>
+              Stop
             </button>
+            <button
+              style={preparingGif ? { ...S.btnSecondary, opacity: 0.6, cursor: 'not-allowed' } : S.btnSecondary}
+              disabled={preparingGif}
+              onClick={handlePrepareGif}
+            >
+              {preparingGif ? (
+                <>
+                  <span style={S.spinner} />
+                  Preparing GIF…
+                </>
+              ) : (
+                'Prepare GIF'
+              )}
+            </button>
+            {gifResult && (
+              <button style={S.btn} onClick={handleDownload}>
+                Download GIF ({Math.round(gifResult.gifData.byteLength / 1024)} KB)
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -783,11 +874,11 @@ export function SenderPage() {
             <span style={S.infoLabel}>Live speed</span>
             <span style={S.infoValue}>{frameRateFps} fps ({formatDelayMs(frameDelayMs)} ms)</span>
             <span style={S.infoLabel}>GIF export speed</span>
-            <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${formatDelayMs(gifResult.frameDelayMs)} ms)` : 'Preparing…'}</span>
+            <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${formatDelayMs(gifResult.frameDelayMs)} ms)` : preparingGif ? 'Preparing…' : 'Not prepared'}</span>
             <span style={S.infoLabel}>{stats.fecCodec === 'wasm-raptorq' ? 'RaptorQ packets' : 'Generations'}</span>
             <span style={S.infoValue}>{stats.totalGenerations}</span>
             <span style={S.infoLabel}>GIF size</span>
-            <span style={S.infoValue}>{gifResult ? formatBytes(gifResult.gifData.byteLength) : '…'}</span>
+            <span style={S.infoValue}>{gifResult ? formatBytes(gifResult.gifData.byteLength) : preparingGif ? '…' : 'Not prepared'}</span>
           </div>
         </div>
       )}

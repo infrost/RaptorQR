@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RAPTORQ_SYMBOL_INDEX } from '@/core/protocol/constants';
+import { CRC32C_SIZE, HEADER_SIZE, RAPTORQ_SYMBOL_INDEX } from '@/core/protocol/constants';
 import { createPacket, packetCodec, parsePacket } from '@/core/protocol/packet';
 import {
   RaptorQWasmDecoder,
@@ -27,6 +27,23 @@ describe('RaptorQ codec sentinel', () => {
 
     expect(packetCodec(rlnc.header)).toBe('js-rlnc');
     expect(packetCodec(raptorq.header)).toBe('wasm-raptorq');
+  });
+
+  it('should use the existing header space for codec detection', () => {
+    const common = {
+      generationIndex: 0,
+      totalGenerations: 1,
+      isText: true,
+      isLastGeneration: true,
+      compressed: false,
+      dataLength: 4,
+    };
+    const payload = new Uint8Array([0, 0, 0, 1]);
+    const rlncPacket = createPacket({ ...common, symbolIndex: 0 }, payload);
+    const raptorqPacket = createPacket({ ...common, symbolIndex: RAPTORQ_SYMBOL_INDEX }, payload);
+
+    expect(raptorqPacket.length).toBe(rlncPacket.length);
+    expect(raptorqPacket.length).toBe(HEADER_SIZE + payload.length + CRC32C_SIZE);
   });
 });
 
