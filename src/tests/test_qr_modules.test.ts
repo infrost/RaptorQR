@@ -39,12 +39,12 @@ describe('Frame raster', () => {
     expect(rgba.data[2]).toBe(255);
   });
 
-  it('should round-trip through decode', () => {
+  it('should round-trip through decode', async () => {
     const original = 'Hello QR';
     const data = new TextEncoder().encode(original);
     const matrix = generateQRMatrix(data, 1, 'L');
     const gray = rasterizeToGrayscale(matrix, 3);
-    const decoded = decodeQRFromBuffer(gray.data, gray.width, gray.height);
+    const decoded = await decodeQRFromBuffer(gray.data, gray.width, gray.height);
     expect(decoded).not.toBeNull();
     expect(decoded!.version).toBe(1);
     expect(new TextDecoder().decode(decoded!.bytes)).toBe(original);

@@ -46,7 +46,7 @@ type CSSProps = Record<string, string | number>;
 
 const MIN_FRAME_RATE_FPS = 2;
 const MAX_FRAME_RATE_FPS = 60;
-const DEFAULT_FRAME_RATE_FPS = 5;
+const DEFAULT_FRAME_RATE_FPS = 30;
 const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
 const FRAME_CACHE_LIMIT = 120;
@@ -112,7 +112,22 @@ const S = {
     imageRendering: 'pixelated' as const,
     maxWidth: '100%',
     display: 'block',
-    margin: '12px 0',
+  } as CSSProps,
+  qrStage: (fullscreen: boolean): CSSProps => ({
+    background: '#000',
+    borderRadius: fullscreen ? 0 : 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: fullscreen ? 0 : '12px 0',
+    width: fullscreen ? '100vw' : 'fit-content',
+    height: fullscreen ? '100vh' : 'auto',
+    maxWidth: '100%',
+  }),
+  fullscreenPreview: {
+    width: 'min(100vw, 100vh)',
+    height: 'min(100vw, 100vh)',
+    borderRadius: 0,
   } as CSSProps,
   infoGrid: {
     display: 'grid',
@@ -196,8 +211,10 @@ export function SenderPage() {
   const [gifResult, setGifResult] = useState<GifResult | null>(null);
   const [stats, setStats] = useState<{ originalSize: number; preprocessedSize: number; frameCount: number; totalGenerations: number } | null>(null);
   const [error, setError] = useState('');
+  const [fullscreenActive, setFullscreenActive] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const qrStageRef = useRef<HTMLDivElement | null>(null);
   const liveTransferRef = useRef<LiveTransfer | null>(null);
   const playbackTimerRef = useRef<number | null>(null);
   const liveFrameIndexRef = useRef(0);
@@ -254,6 +271,14 @@ export function SenderPage() {
   useEffect(() => {
     frameRateFpsRef.current = frameRateFps;
   }, [frameRateFps]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setFullscreenActive(document.fullscreenElement === qrStageRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     liveTransferRef.current = liveTransfer;
@@ -386,7 +411,7 @@ export function SenderPage() {
 
       // ── Step 2: GIF worker ─────────────────────────────────────────
       const outputFrameRateFps = frameRateFpsRef.current;
-      const outputFrameDelayMs = frameRateToDelayMs(outputFrameRateFps);
+      const outputFrameDelayMs = Math.round(frameRateToDelayMs(outputFrameRateFps));
       const gifWorker = new Worker(
         new URL('@/workers/gif.worker.ts', import.meta.url),
         { type: 'module' },
@@ -443,6 +468,27 @@ export function SenderPage() {
     URL.revokeObjectURL(url);
   }, [gifResult, stats]);
 
+  const handleFullscreenPlayback = useCallback(async () => {
+    const stage = qrStageRef.current;
+    if (!stage) return;
+
+    try {
+      if (document.fullscreenElement === stage) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      if (!stage.requestFullscreen) {
+        setError('Fullscreen is not supported in this browser.');
+        return;
+      }
+
+      await stage.requestFullscreen();
+    } catch (err: any) {
+      setError(`Fullscreen error: ${err.message ?? String(err)}`);
+    }
+  }, []);
+
   return (
     <div>
       {/* ── Input mode toggle ───────────────────────────────────────────────── */}
@@ -492,7 +538,7 @@ export function SenderPage() {
         <div style={{ marginBottom: 16 }}>
           <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={S.label}>QR speed</span>
-            <span style={S.infoValue}>{frameRateFps} fps · {frameDelayMs} ms/frame</span>
+            <span style={S.infoValue}>{frameRateFps} fps · {formatDelayMs(frameDelayMs)} ms/frame</span>
           </div>
           <input
             type="range"
@@ -529,14 +575,19 @@ export function SenderPage() {
       {liveTransfer && (
         <div style={S.section}>
           <div style={S.label}>Live QR Transfer</div>
-          <canvas
-            ref={canvasRef}
-            width={liveTransfer.width}
-            height={liveTransfer.height}
-            aria-label="Live QR transfer frames"
-            style={S.preview}
-          />
+          <div ref={qrStageRef} style={S.qrStage(fullscreenActive)}>
+            <canvas
+              ref={canvasRef}
+              width={liveTransfer.width}
+              height={liveTransfer.height}
+              aria-label="Live QR transfer frames"
+              style={fullscreenActive ? { ...S.preview, ...S.fullscreenPreview } : S.preview}
+            />
+          </div>
           <div style={{ ...S.row, marginTop: 8 }}>
+            <button style={S.btnSecondary} onClick={handleFullscreenPlayback}>
+              Fullscreen QR
+            </button>
             <button
               style={gifResult ? S.btn : { ...S.btnSecondary, opacity: 0.6, cursor: 'not-allowed' }}
               disabled={!gifResult}
@@ -566,9 +617,9 @@ export function SenderPage() {
             <span style={S.infoLabel}>Frame count</span>
             <span style={S.infoValue}>{stats.frameCount}</span>
             <span style={S.infoLabel}>Live speed</span>
-            <span style={S.infoValue}>{frameRateFps} fps ({frameDelayMs} ms)</span>
+            <span style={S.infoValue}>{frameRateFps} fps ({formatDelayMs(frameDelayMs)} ms)</span>
             <span style={S.infoLabel}>GIF export speed</span>
-            <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${gifResult.frameDelayMs} ms)` : 'Preparing…'}</span>
+            <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${formatDelayMs(gifResult.frameDelayMs)} ms)` : 'Preparing…'}</span>
             <span style={S.infoLabel}>Generations</span>
             <span style={S.infoValue}>{stats.totalGenerations}</span>
             <span style={S.infoLabel}>GIF size</span>
@@ -594,7 +645,11 @@ function clampFrameRate(value: number): number {
 }
 
 function frameRateToDelayMs(fps: number): number {
-  return Math.round(1000 / clampFrameRate(fps));
+  return 1000 / clampFrameRate(fps);
+}
+
+function formatDelayMs(ms: number): string {
+  return Number.isInteger(ms) ? String(ms) : ms.toFixed(1);
 }
 
 function createFrameCache(): FrameCache {

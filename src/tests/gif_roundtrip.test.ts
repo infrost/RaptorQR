@@ -46,7 +46,7 @@ describe('GIF Roundtrip', () => {
     for (let i = 0; i < gifData.frames.length; i++) {
       const rgba = renderGifFrame(gifData, i);
       const imageData = new ImageData(rgba, gifData.width, gifData.height);
-      const decodedQR = decodeQRFromCanvas(imageData);
+      const decodedQR = await decodeQRFromCanvas(imageData);
       expect(decodedQR, `GIF frame ${i} failed QR decode`).not.toBeNull();
 
       const pkt = parsePacket(decodedQR!.bytes);

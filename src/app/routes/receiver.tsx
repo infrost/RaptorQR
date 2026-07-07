@@ -20,7 +20,7 @@ type DecodeRateSample = { time: number; count: number };
 
 const MIN_SCAN_RATE_FPS = 2;
 const MAX_SCAN_RATE_FPS = 60;
-const DEFAULT_SCAN_RATE_FPS = 7;
+const DEFAULT_SCAN_RATE_FPS = 60;
 const DECODE_RATE_WINDOW_MS = 1000;
 
 const S = {
@@ -550,7 +550,7 @@ export function ReceiverPage() {
     ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cw, ch);
     const imageData = ctx.getImageData(0, 0, cw, ch);
 
-    worker.postMessage({ type: 'frame', imageData });
+    worker.postMessage({ type: 'frame', imageData, realtime: true });
   }, [zoomLevel]);
 
   // ── Download recovered file ──────────────────────────────────────────────
@@ -609,7 +609,7 @@ export function ReceiverPage() {
           <div style={{ marginBottom: 14 }}>
             <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
               <span style={S.label}>Scan rate</span>
-              <span style={S.statValue}>{scanRateFps} fps · {scanIntervalMs} ms/sample</span>
+              <span style={S.statValue}>{scanRateFps} fps · {formatDelayMs(scanIntervalMs)} ms/sample</span>
             </div>
             <input
               type="range"
@@ -840,7 +840,11 @@ function clampScanRate(value: number): number {
 }
 
 function scanRateToIntervalMs(fps: number): number {
-  return Math.round(1000 / clampScanRate(fps));
+  return 1000 / clampScanRate(fps);
+}
+
+function formatDelayMs(ms: number): string {
+  return Number.isInteger(ms) ? String(ms) : ms.toFixed(1);
 }
 
 function getCameraUnavailableMessage(): string {

@@ -35,7 +35,16 @@ interface DecodeState {
   };
 }
 
+interface QueuedFrame {
+  imageData: ImageData;
+  realtime: boolean;
+}
+
+const MAX_REALTIME_FRAME_QUEUE = 60;
+
 let current: DecodeState | null = null;
+let frameQueue: QueuedFrame[] = [];
+let processingQueue = false;
 
 // ─── Worker handler ───────────────────────────────────────────────────────────
 
@@ -44,6 +53,7 @@ self.onmessage = (e: MessageEvent) => {
 
   if (msg.type === 'reset') {
     current = null;
+    frameQueue = [];
     return;
   }
 
@@ -62,19 +72,53 @@ self.onmessage = (e: MessageEvent) => {
       }
     }
     if (!imageData) return;
-    try {
-      handleFrame(imageData);
-    } catch (err: any) {
-      self.postMessage({ type: 'error', message: `Frame error: ${err.message ?? String(err)}` });
-    }
+    queueFrame(imageData, msg.realtime === true);
     return;
   }
 };
 
 // ─── Frame handling ───────────────────────────────────────────────────────────
 
-function handleFrame(imageData: ImageData): void {
-  const decoded = decodeQRFromCanvas(imageData, { inversionAttempts: 'attemptBoth' });
+function queueFrame(imageData: ImageData, realtime: boolean): void {
+  if (realtime) {
+    const realtimeQueueLength = frameQueue.reduce(
+      (count, frame) => count + (frame.realtime ? 1 : 0),
+      0,
+    );
+    if (realtimeQueueLength >= MAX_REALTIME_FRAME_QUEUE) {
+      const oldestRealtimeIndex = frameQueue.findIndex((frame) => frame.realtime);
+      if (oldestRealtimeIndex >= 0) {
+        frameQueue.splice(oldestRealtimeIndex, 1);
+      }
+    }
+  }
+  frameQueue.push({ imageData, realtime });
+  void processFrameQueue();
+}
+
+async function processFrameQueue(): Promise<void> {
+  if (processingQueue) return;
+  processingQueue = true;
+
+  try {
+    while (frameQueue.length > 0) {
+      const queued = frameQueue.shift()!;
+      try {
+        await handleFrame(queued.imageData);
+        if (current?.completed) {
+          frameQueue = [];
+        }
+      } catch (err: any) {
+        self.postMessage({ type: 'error', message: `Frame error: ${err.message ?? String(err)}` });
+      }
+    }
+  } finally {
+    processingQueue = false;
+  }
+}
+
+async function handleFrame(imageData: ImageData): Promise<void> {
+  const decoded = await decodeQRFromCanvas(imageData);
   if (!decoded) return;
 
   let packet: Packet;

@@ -62,7 +62,7 @@ describe('Production Roundtrip', () => {
 
       const rgba = renderGifFrame(gifData, i);
       const imageData = new ImageData(rgba, gifData.width, gifData.height);
-      const decodedQR = decodeQRFromCanvas(imageData);
+      const decodedQR = await decodeQRFromCanvas(imageData);
       if (!decodedQR) continue;
 
       const pkt = parsePacket(decodedQR.bytes);

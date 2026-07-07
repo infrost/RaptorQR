@@ -27,7 +27,7 @@ describe('Frame Decode', () => {
       const imageData = rasterizeQR(matrix, 4);
 
       // Decode QR
-      const decodedQR = decodeQRFromCanvas(imageData);
+      const decodedQR = await decodeQRFromCanvas(imageData);
       expect(decodedQR, `Frame ${i} failed to decode`).not.toBeNull();
 
       // Parse and verify header fields match

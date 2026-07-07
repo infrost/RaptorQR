@@ -1,8 +1,9 @@
 /**
  * Shared QR transfer profiles.
  *
- * The protocol does not carry the profile on the wire. Sender and receiver
- * must be configured to the same profile.
+ * The protocol does not carry the profile on the wire. The sender chooses a
+ * symbol size from a profile; the receiver infers the active size from decoded
+ * packets.
  */
 
 import { CRC32C_SIZE, ECC_LEVEL, HEADER_SIZE, QR_VERSION } from './constants';
@@ -27,7 +28,13 @@ const PROFILE_SPECS: Array<{ version: number; eccLevel: EccLevel }> = [
   { version: 40, eccLevel: 'M' },
 ];
 
-export const DEFAULT_QR_PROFILE_ID = profileId(QR_VERSION, ECC_LEVEL);
+const DEFAULT_PROFILE_VERSION = 20;
+const DEFAULT_PROFILE_ECC_LEVEL: EccLevel = 'M';
+
+export const DEFAULT_QR_PROFILE_ID = profileId(
+  DEFAULT_PROFILE_VERSION,
+  DEFAULT_PROFILE_ECC_LEVEL,
+);
 
 export const QR_TRANSFER_PROFILES: QRTransferProfile[] = PROFILE_SPECS.map((spec) => {
   const maxPacketSize = getMaxByteCapacity(spec.version, spec.eccLevel);
