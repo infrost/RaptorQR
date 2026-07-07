@@ -95,7 +95,10 @@ const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
 const FRAME_CACHE_LIMIT = 240;
 const PREFETCH_DISPLAY_FRAMES = 120;
-const QR_RENDER_BATCH_LIMIT = 96;
+const QR_RENDER_BATCH_LIMIT = 32;
+const RENDER_CACHE_FILL_RATIO = 0.75;
+const LIVE_FPS_WINDOW_MS = 2_000;
+const LIVE_STATS_UPDATE_MS = 250;
 
 const S = {
   section: {
@@ -259,6 +262,9 @@ export function SenderPage() {
   const [fecCodec, setFecCodec] = useState<FecCodec>(DEFAULT_FEC_CODEC);
   const [raptorqRepairPercent, setRaptorqRepairPercent] = useState(DEFAULT_RAPTORQ_REPAIR_PERCENT);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
+  const [actualLiveFps, setActualLiveFps] = useState(0);
+  const [renderReadyPackets, setRenderReadyPackets] = useState(0);
+  const [renderPendingPackets, setRenderPendingPackets] = useState(0);
   const [parallelQRCount, setParallelQRCount] = useState<ParallelQRCount>(DEFAULT_PARALLEL_QR_COUNT);
   const [liveTransfer, setLiveTransfer] = useState<LiveTransfer | null>(null);
   const [gifResult, setGifResult] = useState<GifResult | null>(null);
@@ -286,6 +292,8 @@ export function SenderPage() {
   const frameCacheRef = useRef<FrameCache>(createFrameCache());
   const requestedPacketImagesRef = useRef<Set<number>>(new Set());
   const playbackStartedRef = useRef(false);
+  const liveDrawCountRef = useRef(0);
+  const liveDrawRateSamplesRef = useRef<Array<{ time: number; count: number }>>([]);
   const runIdRef = useRef(0);
   const qrRenderRequestIdRef = useRef(0);
   const qrProfile = createQRTransferProfile(qrVersion, eccLevel, qrEncoder);
@@ -314,6 +322,41 @@ export function SenderPage() {
     qrRenderWorkerRef.current = null;
   }, []);
 
+  const updateLiveStats = useCallback(() => {
+    const now = performance.now();
+    const samples = liveDrawRateSamplesRef.current;
+    samples.push({ time: now, count: liveDrawCountRef.current });
+
+    while (samples.length > 1 && now - samples[0]!.time > LIVE_FPS_WINDOW_MS) {
+      samples.shift();
+    }
+
+    const first = samples[0];
+    const elapsedSeconds = first ? (now - first.time) / 1000 : 0;
+    const rawFps = first && elapsedSeconds > 0
+      ? (liveDrawCountRef.current - first.count) / elapsedSeconds
+      : 0;
+    const fps = Math.round(rawFps * 10) / 10;
+    const readyPackets = frameCacheRef.current.frames.size;
+    const pendingPackets = requestedPacketImagesRef.current.size;
+
+    setActualLiveFps((previous) => previous === fps ? previous : fps);
+    setRenderReadyPackets((previous) => previous === readyPackets ? previous : readyPackets);
+    setRenderPendingPackets((previous) => previous === pendingPackets ? previous : pendingPackets);
+  }, []);
+
+  const resetLiveStats = useCallback(() => {
+    liveDrawCountRef.current = 0;
+    liveDrawRateSamplesRef.current = [];
+    setActualLiveFps(0);
+    setRenderReadyPackets(0);
+    setRenderPendingPackets(0);
+  }, []);
+
+  const recordLiveFrameDraw = useCallback(() => {
+    liveDrawCountRef.current++;
+  }, []);
+
   const requestRenderWindow = useCallback((
     transfer: LiveTransfer,
     startFrameIndex: number,
@@ -321,8 +364,23 @@ export function SenderPage() {
     const worker = qrRenderWorkerRef.current;
     if (!worker) return;
 
+    const renderWindowFrames = getRenderWindowDisplayFrames(transfer, frameCacheRef.current);
+    const maxOutstandingPackets = getMaxOutstandingRenderPackets(transfer, frameCacheRef.current);
+    pruneFrameCacheForPlaybackWindow(frameCacheRef.current, transfer, startFrameIndex, renderWindowFrames);
+    pruneRequestedPacketsForPlaybackWindow(
+      requestedPacketImagesRef.current,
+      transfer,
+      startFrameIndex,
+      renderWindowFrames,
+    );
+
+    let availableSlots = maxOutstandingPackets
+      - frameCacheRef.current.frames.size
+      - requestedPacketImagesRef.current.size;
+    if (availableSlots <= 0) return;
+
     const missingPacketIndexes: number[] = [];
-    const endFrameIndex = startFrameIndex + PREFETCH_DISPLAY_FRAMES;
+    const endFrameIndex = startFrameIndex + renderWindowFrames;
 
     for (let frameIndex = startFrameIndex; frameIndex < endFrameIndex; frameIndex++) {
       const normalizedFrameIndex = frameIndex % transfer.displayFrameCount;
@@ -338,11 +396,12 @@ export function SenderPage() {
 
         requestedPacketImagesRef.current.add(packetIndex);
         missingPacketIndexes.push(packetIndex);
-        if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT) {
+        availableSlots--;
+        if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
           break;
         }
       }
-      if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT) {
+      if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
         break;
       }
     }
@@ -381,6 +440,7 @@ export function SenderPage() {
         }
 
         drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+        recordLiveFrameDraw();
         requestRenderWindow(transfer, frameIndex + 1);
         liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
         scheduleNextLiveFrame();
@@ -389,7 +449,7 @@ export function SenderPage() {
         setError(err.message ?? String(err));
       }
     }, delayMs);
-  }, [clearPlaybackTimer, requestRenderWindow]);
+  }, [clearPlaybackTimer, recordLiveFrameDraw, requestRenderWindow]);
 
   const startLivePlayback = useCallback((resetIndex: boolean) => {
     clearPlaybackTimer();
@@ -410,14 +470,23 @@ export function SenderPage() {
     }
 
     drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+    recordLiveFrameDraw();
     requestRenderWindow(transfer, frameIndex + 1);
     liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
     scheduleNextLiveFrame();
-  }, [clearPlaybackTimer, requestRenderWindow, scheduleNextLiveFrame]);
+  }, [clearPlaybackTimer, recordLiveFrameDraw, requestRenderWindow, scheduleNextLiveFrame]);
 
   useEffect(() => {
     frameRateFpsRef.current = frameRateFps;
   }, [frameRateFps]);
+
+  useEffect(() => {
+    if (!liveTransfer) return;
+
+    updateLiveStats();
+    const statsTimer = window.setInterval(updateLiveStats, LIVE_STATS_UPDATE_MS);
+    return () => window.clearInterval(statsTimer);
+  }, [liveTransfer, updateLiveStats]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -432,6 +501,7 @@ export function SenderPage() {
     clearFrameCache(frameCacheRef.current);
     requestedPacketImagesRef.current.clear();
     playbackStartedRef.current = false;
+    resetLiveStats();
     clearPlaybackTimer();
     terminateQRRenderWorker();
 
@@ -454,21 +524,46 @@ export function SenderPage() {
       if (msg.type === 'tile') {
         void (async () => {
           try {
+            requestedPacketImagesRef.current.delete(msg.packetIndex);
+
+            const activeTransfer = liveTransferRef.current;
+            if (!activeTransfer) return;
+
+            const currentFrameIndex = liveFrameIndexRef.current % activeTransfer.displayFrameCount;
+            const renderWindowFrames = getRenderWindowDisplayFrames(activeTransfer, frameCacheRef.current);
+            if (!isPacketInPlaybackWindow(
+              activeTransfer,
+              msg.packetIndex,
+              currentFrameIndex,
+              renderWindowFrames,
+            )) {
+              return;
+            }
+
             const renderedTile = await prepareRenderedTile(msg.imageData);
             if (msg.requestId !== qrRenderRequestIdRef.current) {
               closeRenderedTile(renderedTile);
               return;
             }
 
-            requestedPacketImagesRef.current.delete(msg.packetIndex);
-            cacheRenderedTile(frameCacheRef.current, msg.packetIndex, renderedTile);
-            trimFrameCache(frameCacheRef.current);
+            if (!isPacketInPlaybackWindow(
+              activeTransfer,
+              msg.packetIndex,
+              liveFrameIndexRef.current % activeTransfer.displayFrameCount,
+              renderWindowFrames,
+            )) {
+              closeRenderedTile(renderedTile);
+              return;
+            }
 
-            if (!playbackStartedRef.current && isDisplayFrameReady(liveTransfer, 0, frameCacheRef.current)) {
+            cacheRenderedTile(frameCacheRef.current, msg.packetIndex, renderedTile);
+            trimFrameCache(frameCacheRef.current, activeTransfer, liveFrameIndexRef.current);
+
+            if (!playbackStartedRef.current && isDisplayFrameReady(activeTransfer, 0, frameCacheRef.current)) {
               playbackStartedRef.current = true;
               setStatus(
-                `Live QR running (${liveTransfer.packets.length} packets, ` +
-                `${liveTransfer.parallelCount} per tick).`,
+                `Live QR running (${activeTransfer.packets.length} packets, ` +
+                `${activeTransfer.parallelCount} per tick).`,
               );
               startLivePlayback(true);
             }
@@ -502,11 +597,13 @@ export function SenderPage() {
       requestedPacketImagesRef.current.clear();
       playbackStartedRef.current = false;
       clearFrameCache(frameCacheRef.current);
+      resetLiveStats();
     };
   }, [
     liveTransfer,
     clearPlaybackTimer,
     requestRenderWindow,
+    resetLiveStats,
     startLivePlayback,
     terminateQRRenderWorker,
   ]);
@@ -523,6 +620,7 @@ export function SenderPage() {
     clearFrameCache(frameCacheRef.current);
     requestedPacketImagesRef.current.clear();
     playbackStartedRef.current = false;
+    resetLiveStats();
     setLiveTransfer(null);
     setGifResult(null);
     setStats(null);
@@ -530,7 +628,7 @@ export function SenderPage() {
     setPreparingGif(false);
     setError('');
     setStatus('');
-  }, [clearPlaybackTimer, terminateEncodeWorker, terminateGifWorker, terminateQRRenderWorker]);
+  }, [clearPlaybackTimer, resetLiveStats, terminateEncodeWorker, terminateGifWorker, terminateQRRenderWorker]);
 
   const handleStopTransfer = useCallback(() => {
     resetOutput();
@@ -1074,6 +1172,18 @@ export function SenderPage() {
             <span style={S.infoValue}>{liveTransfer ? `${liveTransfer.parallelCount} per tick` : `${parallelQRCount} per tick`}</span>
             <span style={S.infoLabel}>Live speed</span>
             <span style={S.infoValue}>{frameRateFps} fps ({formatDelayMs(frameDelayMs)} ms)</span>
+            <span style={S.infoLabel}>Actual live fps</span>
+            <span style={S.infoValue}>
+              {liveTransfer
+                ? `${actualLiveFps.toFixed(1)} fps · ${(actualLiveFps * liveTransfer.parallelCount).toFixed(1)} QR/s`
+                : 'Not running'}
+            </span>
+            <span style={S.infoLabel}>QR render cache</span>
+            <span style={S.infoValue}>
+              {liveTransfer
+                ? `${renderReadyPackets} ready · ${renderPendingPackets} pending`
+                : 'Not running'}
+            </span>
             <span style={S.infoLabel}>GIF export speed</span>
             <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${formatDelayMs(gifResult.frameDelayMs)} ms)` : preparingGif ? 'Preparing…' : 'Not prepared'}</span>
             <span style={S.infoLabel}>{stats.fecCodec === 'wasm-raptorq' ? 'RaptorQ packets' : 'Generations'}</span>
@@ -1260,7 +1370,16 @@ function isDisplayFrameReady(
   return true;
 }
 
-function trimFrameCache(cache: FrameCache): void {
+function trimFrameCache(
+  cache: FrameCache,
+  transfer?: LiveTransfer,
+  startFrameIndex = 0,
+): void {
+  if (transfer) {
+    const renderWindowFrames = getRenderWindowDisplayFrames(transfer, cache);
+    pruneFrameCacheForPlaybackWindow(cache, transfer, startFrameIndex, renderWindowFrames);
+  }
+
   while (cache.frames.size > cache.maxEntries) {
     const oldestKey = cache.frames.keys().next().value;
     if (oldestKey === undefined) return;
@@ -1268,6 +1387,75 @@ function trimFrameCache(cache: FrameCache): void {
     if (oldestTile) closeRenderedTile(oldestTile);
     cache.frames.delete(oldestKey);
   }
+}
+
+function getRenderWindowDisplayFrames(transfer: LiveTransfer, cache: FrameCache): number {
+  const maxCachedFrames = Math.max(1, Math.floor(cache.maxEntries / transfer.parallelCount));
+  const targetFrames = Math.max(1, Math.floor(maxCachedFrames * RENDER_CACHE_FILL_RATIO));
+  return Math.min(PREFETCH_DISPLAY_FRAMES, targetFrames, transfer.displayFrameCount);
+}
+
+function getMaxOutstandingRenderPackets(transfer: LiveTransfer, cache: FrameCache): number {
+  return Math.max(
+    transfer.parallelCount,
+    getRenderWindowDisplayFrames(transfer, cache) * transfer.parallelCount,
+  );
+}
+
+function pruneFrameCacheForPlaybackWindow(
+  cache: FrameCache,
+  transfer: LiveTransfer,
+  startFrameIndex: number,
+  renderWindowFrames = getRenderWindowDisplayFrames(transfer, cache),
+): void {
+  if (transfer.displayFrameCount <= renderWindowFrames) return;
+
+  for (const [packetIndex, tile] of cache.frames) {
+    if (isPacketInPlaybackWindow(transfer, packetIndex, startFrameIndex, renderWindowFrames)) {
+      continue;
+    }
+    closeRenderedTile(tile);
+    cache.frames.delete(packetIndex);
+  }
+}
+
+function pruneRequestedPacketsForPlaybackWindow(
+  requestedPackets: Set<number>,
+  transfer: LiveTransfer,
+  startFrameIndex: number,
+  renderWindowFrames: number,
+): void {
+  if (transfer.displayFrameCount <= renderWindowFrames) return;
+
+  for (const packetIndex of requestedPackets) {
+    if (isPacketInPlaybackWindow(transfer, packetIndex, startFrameIndex, renderWindowFrames)) {
+      continue;
+    }
+    requestedPackets.delete(packetIndex);
+  }
+}
+
+function isPacketInPlaybackWindow(
+  transfer: LiveTransfer,
+  packetIndex: number,
+  startFrameIndex: number,
+  renderWindowFrames: number,
+): boolean {
+  if (packetIndex < 0 || packetIndex >= transfer.packets.length) return false;
+  if (transfer.displayFrameCount <= renderWindowFrames) return true;
+
+  const packetFrameIndex = Math.floor(packetIndex / transfer.parallelCount);
+  const normalizedStartFrame = normalizeFrameIndex(startFrameIndex, transfer.displayFrameCount);
+  const distance = (
+    packetFrameIndex
+    - normalizedStartFrame
+    + transfer.displayFrameCount
+  ) % transfer.displayFrameCount;
+  return distance < renderWindowFrames;
+}
+
+function normalizeFrameIndex(frameIndex: number, frameCount: number): number {
+  return ((frameIndex % frameCount) + frameCount) % frameCount;
 }
 
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {
