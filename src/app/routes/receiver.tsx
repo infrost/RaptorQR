@@ -17,6 +17,12 @@ import {
   type QrBinarizer,
   type QrDecodeSettings,
 } from '@/core/qr/decode_settings';
+import {
+  DEFAULT_RECEIVER_FEC_CODEC,
+  formatFecCodec,
+  normalizeReceiverFecCodec,
+  type ReceiverFecCodec,
+} from '@/core/fec/codec';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +42,7 @@ const MAX_SCAN_RATE_FPS = 60;
 const DEFAULT_SCAN_RATE_FPS = 60;
 const DECODE_RATE_WINDOW_MS = 1000;
 const DECODE_PRESET_OPTIONS: DecodePresetId[] = ['fast', 'balance', 'robust', 'custom'];
+const RECEIVER_FEC_CODEC_OPTIONS: ReceiverFecCodec[] = ['auto', 'js-rlnc', 'wasm-raptorq'];
 
 const S = {
   section: {
@@ -220,10 +227,12 @@ export function ReceiverPage() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [hasZoomSupport, setHasZoomSupport] = useState(false);
   const [scanRateFps, setScanRateFps] = useState(DEFAULT_SCAN_RATE_FPS);
+  const [fecCodec, setFecCodec] = useState<ReceiverFecCodec>(DEFAULT_RECEIVER_FEC_CODEC);
   const [decodePreset, setDecodePreset] = useState<DecodePresetId>(DEFAULT_DECODE_PRESET);
   const [decodeSettings, setDecodeSettings] = useState<QrDecodeSettings>(DEFAULT_DECODE_SETTINGS);
   const [advancedDecodeOpen, setAdvancedDecodeOpen] = useState(false);
   const [decodedQrPerSecond, setDecodedQrPerSecond] = useState(0);
+  const [detectedFecCodec, setDetectedFecCodec] = useState('');
   const [detectedQrVersion, setDetectedQrVersion] = useState(0);
   const [detectedSymbolSize, setDetectedSymbolSize] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -235,6 +244,7 @@ export function ReceiverPage() {
   const decodedQrCountRef = useRef(0);
   const decodedQrRateSamplesRef = useRef<DecodeRateSample[]>([]);
   const decodeSettingsRef = useRef<QrDecodeSettings>(DEFAULT_DECODE_SETTINGS);
+  const fecCodecRef = useRef<ReceiverFecCodec>(DEFAULT_RECEIVER_FEC_CODEC);
   const scanIntervalMs = scanRateToIntervalMs(scanRateFps);
   const scanIntervalMsRef = useRef(scanIntervalMs);
 
@@ -244,8 +254,9 @@ export function ReceiverPage() {
 
   useEffect(() => {
     decodeSettingsRef.current = decodeSettings;
-    workerRef.current?.postMessage({ type: 'settings', settings: decodeSettings });
-  }, [decodeSettings]);
+    fecCodecRef.current = fecCodec;
+    workerRef.current?.postMessage({ type: 'settings', settings: decodeSettings, fecCodec });
+  }, [decodeSettings, fecCodec]);
 
   const updateDecodedQrRate = useCallback((decodedCount: number) => {
     const now = Date.now();
@@ -303,6 +314,7 @@ export function ReceiverPage() {
           setSourceGens(msg.sourceGenerations ?? 0);
           setDetectedQrVersion(msg.qrVersion ?? 0);
           setDetectedSymbolSize(msg.symbolSize ?? 0);
+          setDetectedFecCodec(msg.fecCodec ?? '');
           if (msg.dataLength) {
             dataLengthRef.current = msg.dataLength;
           }
@@ -397,6 +409,10 @@ export function ReceiverPage() {
     setScanRateFps(clampScanRate(Number(value)));
   }, []);
 
+  const handleFecCodecChange = useCallback((value: string) => {
+    setFecCodec(normalizeReceiverFecCodec(value));
+  }, []);
+
   const handleDecodePresetChange = useCallback((value: string) => {
     const preset = normalizeDecodePreset(value);
     setDecodePreset(preset);
@@ -436,6 +452,7 @@ export function ReceiverPage() {
     setNeededPackets(0);
     setDetectedQrVersion(0);
     setDetectedSymbolSize(0);
+    setDetectedFecCodec('');
     setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
@@ -477,7 +494,11 @@ export function ReceiverPage() {
       }
 
       const worker = createWorker();
-      worker.postMessage({ type: 'settings', settings: decodeSettingsRef.current });
+      worker.postMessage({
+        type: 'settings',
+        settings: decodeSettingsRef.current,
+        fecCodec: fecCodecRef.current,
+      });
       workerRef.current = worker;
 
       setScanning(true);
@@ -516,6 +537,7 @@ export function ReceiverPage() {
     setNeededPackets(0);
     setDetectedQrVersion(0);
     setDetectedSymbolSize(0);
+    setDetectedFecCodec('');
     setDecodedQrPerSecond(0);
     setElapsedMs(0);
     setThroughputKbps(0);
@@ -527,7 +549,11 @@ export function ReceiverPage() {
     decodedQrRateSamplesRef.current = [];
 
     const worker = createWorker();
-    worker.postMessage({ type: 'settings', settings: decodeSettingsRef.current });
+    worker.postMessage({
+      type: 'settings',
+      settings: decodeSettingsRef.current,
+      fecCodec: fecCodecRef.current,
+    });
     workerRef.current = worker;
 
     setScanning(true);
@@ -672,6 +698,23 @@ export function ReceiverPage() {
       </div>
 
       <div style={S.section}>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={S.label}>FEC codec</span>
+            <span style={S.statValue}>{formatFecCodec(fecCodec)}</span>
+          </div>
+          <select
+            value={fecCodec}
+            style={S.select}
+            onChange={(e) => handleFecCodecChange((e.target as HTMLSelectElement).value)}
+          >
+            {RECEIVER_FEC_CODEC_OPTIONS.map((codec) => (
+              <option key={codec} value={codec}>
+                {formatFecCodec(codec)}
+              </option>
+            ))}
+          </select>
+        </div>
         <div style={{ marginBottom: 12 }}>
           <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={S.label}>Decode preset</span>
@@ -866,6 +909,11 @@ export function ReceiverPage() {
               <span>
                 QR <span style={S.statValue}>{formatDetectedQR(detectedQrVersion, detectedSymbolSize)}</span>
               </span>
+              {detectedFecCodec && (
+                <span>
+                  FEC <span style={S.statValue}>{formatDetectedFecCodec(detectedFecCodec)}</span>
+                </span>
+              )}
               <span>
                 decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
               </span>
@@ -950,6 +998,11 @@ export function ReceiverPage() {
               <span>
                 QR <span style={S.statValue}>{formatDetectedQR(detectedQrVersion, detectedSymbolSize)}</span>
               </span>
+              {detectedFecCodec && (
+                <span>
+                  FEC <span style={S.statValue}>{formatDetectedFecCodec(detectedFecCodec)}</span>
+                </span>
+              )}
               <span>
                 decode <span style={S.statValue}>{decodedQrPerSecond.toFixed(1)} QR/s</span>
               </span>
@@ -1042,6 +1095,13 @@ function formatDetectedQR(version: number, symbolSize: number): string {
   if (version > 0 && symbolSize > 0) return `V${version} · ${symbolSize} B/frame`;
   if (version > 0) return `V${version}`;
   return 'auto';
+}
+
+function formatDetectedFecCodec(value: string): string {
+  if (value === 'wasm-raptorq' || value === 'js-rlnc') {
+    return formatFecCodec(value);
+  }
+  return value;
 }
 
 function clampScanRate(value: number): number {

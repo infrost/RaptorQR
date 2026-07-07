@@ -5,7 +5,14 @@
  */
 
 import { packetize } from '@/core/sender/packetizer';
+import { packetizeRaptorQ } from '@/core/sender/raptorq_packetizer';
 import { scheduleFrames } from '@/core/sender/scheduler';
+import {
+  DEFAULT_RAPTORQ_REPAIR_PERCENT,
+  normalizeFecCodec,
+  normalizeRaptorQRepairPercent,
+  type FecCodec,
+} from '@/core/fec/codec';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -17,6 +24,8 @@ interface EncodeInput {
   filename?: string;
   mimeType?: string;
   symbolSize?: number;
+  fecCodec?: FecCodec;
+  raptorqRepairPercent?: number;
 }
 
 interface EncodeOutput {
@@ -41,19 +50,50 @@ self.onmessage = (e: MessageEvent<EncodeInput>) => {
   const msg = e.data;
   if (msg.type !== 'encode') return;
 
-  try {
-    const result = handleEncode(msg);
-    const transfer: ArrayBufferLike[] = result.packets
-      .map((p) => p.buffer as ArrayBuffer)
-      .filter((b): b is ArrayBuffer => b instanceof ArrayBuffer && b.byteLength <= 1024 * 1024);
-    self.postMessage(result, transfer.length > 0 ? { transfer } : undefined);
-  } catch (err: any) {
-    self.postMessage({ type: 'error', message: err.message ?? String(err) } satisfies ErrorOutput);
-  }
+  void (async () => {
+    try {
+      const result = await handleEncode(msg);
+      const transfer: ArrayBufferLike[] = result.packets
+        .map((p) => p.buffer as ArrayBuffer)
+        .filter((b): b is ArrayBuffer => b instanceof ArrayBuffer && b.byteLength <= 1024 * 1024);
+      self.postMessage(result, transfer.length > 0 ? { transfer } : undefined);
+    } catch (err: any) {
+      self.postMessage({ type: 'error', message: err.message ?? String(err) } satisfies ErrorOutput);
+    }
+  })();
 };
 
-function handleEncode(input: EncodeInput): EncodeOutput {
+async function handleEncode(input: EncodeInput): Promise<EncodeOutput> {
   const originalBytes = new Uint8Array(input.data);
+  const fecCodec = normalizeFecCodec(input.fecCodec);
+
+  if (fecCodec === 'wasm-raptorq') {
+    const result = await packetizeRaptorQ(
+      originalBytes,
+      input.isText,
+      input.compress,
+      input.filename,
+      input.mimeType,
+      {
+        maxTransportPayloadSize: input.symbolSize ?? 0,
+        repairPercent: normalizeRaptorQRepairPercent(
+          input.raptorqRepairPercent ?? DEFAULT_RAPTORQ_REPAIR_PERCENT,
+        ),
+      },
+    );
+
+    return {
+      type: 'encoded',
+      packets: result.packets,
+      totalGenerations: result.totalGenerations,
+      stats: {
+        originalSize: originalBytes.length,
+        preprocessedSize: result.dataLength,
+        frameCount: result.packets.length,
+      },
+    };
+  }
+
   const result = packetize(
     originalBytes,
     input.isText,

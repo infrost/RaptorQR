@@ -51,6 +51,9 @@ export const K = 16;
 /** Number of coded repair symbols per generation. */
 export const R = 8;
 
+/** Reserved symbol index used to mark RaptorQ WASM transport packets. */
+export const RAPTORQ_SYMBOL_INDEX = 31;
+
 /** QR code version. */
 export const QR_VERSION = 10;
 

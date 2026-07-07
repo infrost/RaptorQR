@@ -19,6 +19,16 @@ import {
   stripedPacketIndex,
   type ParallelQRCount,
 } from '@/core/sender/parallel_striping';
+import {
+  DEFAULT_FEC_CODEC,
+  DEFAULT_RAPTORQ_REPAIR_PERCENT,
+  MAX_RAPTORQ_REPAIR_PERCENT,
+  MIN_RAPTORQ_REPAIR_PERCENT,
+  formatFecCodec,
+  normalizeFecCodec,
+  normalizeRaptorQRepairPercent,
+  type FecCodec,
+} from '@/core/fec/codec';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -64,6 +74,7 @@ const MAX_FRAME_RATE_FPS = 60;
 const DEFAULT_FRAME_RATE_FPS = 30;
 const DEFAULT_PARALLEL_QR_COUNT: ParallelQRCount = 1;
 const PARALLEL_QR_COUNTS: ParallelQRCount[] = [1, 2, 4];
+const FEC_CODEC_OPTIONS: FecCodec[] = ['js-rlnc', 'wasm-raptorq'];
 const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
 const FRAME_CACHE_LIMIT = 120;
@@ -225,11 +236,20 @@ export function SenderPage() {
   const [status, setStatus] = useState('');
   const [qrVersion, setQrVersion] = useState<QRVersionOption>(DEFAULT_QR_VERSION);
   const [eccLevel, setEccLevel] = useState<EccLevel>(DEFAULT_QR_ECC_LEVEL);
+  const [fecCodec, setFecCodec] = useState<FecCodec>(DEFAULT_FEC_CODEC);
+  const [raptorqRepairPercent, setRaptorqRepairPercent] = useState(DEFAULT_RAPTORQ_REPAIR_PERCENT);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
   const [parallelQRCount, setParallelQRCount] = useState<ParallelQRCount>(DEFAULT_PARALLEL_QR_COUNT);
   const [liveTransfer, setLiveTransfer] = useState<LiveTransfer | null>(null);
   const [gifResult, setGifResult] = useState<GifResult | null>(null);
-  const [stats, setStats] = useState<{ originalSize: number; preprocessedSize: number; frameCount: number; totalGenerations: number } | null>(null);
+  const [stats, setStats] = useState<{
+    originalSize: number;
+    preprocessedSize: number;
+    frameCount: number;
+    totalGenerations: number;
+    fecCodec: FecCodec;
+    raptorqRepairPercent: number;
+  } | null>(null);
   const [error, setError] = useState('');
   const [fullscreenActive, setFullscreenActive] = useState(false);
 
@@ -355,6 +375,16 @@ export function SenderPage() {
     resetOutput();
   }, [resetOutput]);
 
+  const handleFecCodecChange = useCallback((value: string) => {
+    setFecCodec(normalizeFecCodec(value));
+    resetOutput();
+  }, [resetOutput]);
+
+  const handleRaptorQRepairPercentChange = useCallback((value: string) => {
+    setRaptorqRepairPercent(normalizeRaptorQRepairPercent(value));
+    resetOutput();
+  }, [resetOutput]);
+
   const handleFrameRateChange = useCallback((value: string) => {
     const nextFrameRate = clampFrameRate(Number(value));
     frameRateFpsRef.current = nextFrameRate;
@@ -422,6 +452,8 @@ export function SenderPage() {
             isText,
             compress,
             symbolSize: selectedQRProfile.maxPayloadSize,
+            fecCodec,
+            raptorqRepairPercent,
             filename: mode === 'file' ? file?.name : undefined,
             mimeType: mode === 'file' ? file?.type : undefined,
           },
@@ -435,6 +467,8 @@ export function SenderPage() {
         preprocessedSize: encoded.stats.preprocessedSize,
         frameCount: encoded.stats.frameCount,
         totalGenerations: encoded.totalGenerations,
+        fecCodec,
+        raptorqRepairPercent,
       });
       const nextLiveTransfer = createLiveTransfer(
         encoded.packets,
@@ -495,7 +529,7 @@ export function SenderPage() {
     } finally {
       setBusy(false);
     }
-  }, [mode, text, file, resetOutput, qrVersion, eccLevel, parallelQRCount]);
+  }, [mode, text, file, resetOutput, qrVersion, eccLevel, fecCodec, raptorqRepairPercent, parallelQRCount]);
 
   const handleDownload = useCallback(() => {
     if (!gifResult) return;
@@ -601,6 +635,46 @@ export function SenderPage() {
         </div>
         <div style={{ marginBottom: 16 }}>
           <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={S.label}>FEC codec</span>
+            <span style={S.infoValue}>{formatFecCodec(fecCodec)}</span>
+          </div>
+          <select
+            value={fecCodec}
+            style={S.select}
+            disabled={busy}
+            onChange={(e) => handleFecCodecChange((e.target as HTMLSelectElement).value)}
+          >
+            {FEC_CODEC_OPTIONS.map((codec) => (
+              <option key={codec} value={codec}>
+                {formatFecCodec(codec)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {fecCodec === 'wasm-raptorq' && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={S.label}>RaptorQ repair</span>
+              <span style={S.infoValue}>{raptorqRepairPercent}%</span>
+            </div>
+            <input
+              type="range"
+              min={MIN_RAPTORQ_REPAIR_PERCENT}
+              max={MAX_RAPTORQ_REPAIR_PERCENT}
+              step={1}
+              value={raptorqRepairPercent}
+              style={S.slider}
+              disabled={busy}
+              onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
+            />
+            <div style={S.sliderLabels}>
+              <span>Less QR</span>
+              <span>More repair</span>
+            </div>
+          </div>
+        )}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={S.label}>QR speed</span>
             <span style={S.infoValue}>{frameRateFps} fps · {formatDelayMs(frameDelayMs)} ms/frame</span>
           </div>
@@ -696,6 +770,12 @@ export function SenderPage() {
             <span style={S.infoValue}>{liveTransfer ? `V${liveTransfer.version}-${liveTransfer.eccLevel}` : qrProfile.label}</span>
             <span style={S.infoLabel}>Symbol payload</span>
             <span style={S.infoValue}>{liveTransfer ? `${liveTransfer.symbolSize} B/frame` : `${qrProfile.maxPayloadSize} B/frame`}</span>
+            <span style={S.infoLabel}>FEC codec</span>
+            <span style={S.infoValue}>
+              {stats.fecCodec === 'wasm-raptorq'
+                ? `${formatFecCodec(stats.fecCodec)} · ${stats.raptorqRepairPercent}% repair`
+                : formatFecCodec(stats.fecCodec)}
+            </span>
             <span style={S.infoLabel}>QR packets</span>
             <span style={S.infoValue}>{stats.frameCount}</span>
             <span style={S.infoLabel}>Parallel QR</span>
@@ -704,7 +784,7 @@ export function SenderPage() {
             <span style={S.infoValue}>{frameRateFps} fps ({formatDelayMs(frameDelayMs)} ms)</span>
             <span style={S.infoLabel}>GIF export speed</span>
             <span style={S.infoValue}>{gifResult ? `${gifResult.frameRateFps} fps (${formatDelayMs(gifResult.frameDelayMs)} ms)` : 'Preparing…'}</span>
-            <span style={S.infoLabel}>Generations</span>
+            <span style={S.infoLabel}>{stats.fecCodec === 'wasm-raptorq' ? 'RaptorQ packets' : 'Generations'}</span>
             <span style={S.infoValue}>{stats.totalGenerations}</span>
             <span style={S.infoLabel}>GIF size</span>
             <span style={S.infoValue}>{gifResult ? formatBytes(gifResult.gifData.byteLength) : '…'}</span>

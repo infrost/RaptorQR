@@ -1,0 +1,13 @@
+{
+  "builtAt": "2026-07-07T13:44:11.574541+00:00",
+  "outputs": [
+    "package.json",
+    "qrstream_raptorq_wasm.d.ts",
+    "qrstream_raptorq_wasm.js",
+    "qrstream_raptorq_wasm_bg.wasm",
+    "qrstream_raptorq_wasm_bg.wasm.d.ts"
+  ],
+  "package": "qrstream_raptorq_wasm",
+  "raptorq": "2.0.1",
+  "target": "web"
+}

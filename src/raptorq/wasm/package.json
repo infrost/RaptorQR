@@ -1,0 +1,15 @@
+{
+  "name": "qrstream_raptorq_wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "qrstream_raptorq_wasm_bg.wasm",
+    "qrstream_raptorq_wasm.js",
+    "qrstream_raptorq_wasm.d.ts"
+  ],
+  "main": "qrstream_raptorq_wasm.js",
+  "types": "qrstream_raptorq_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

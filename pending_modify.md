@@ -31,3 +31,30 @@ XL: V40
 所以它是一个很尴尬的组合：
 整体看：固定 8 个 repair 太浪费，因为很多时候用不上。
 尾部看：固定 8 个 repair 又不够灵活，因为缺的时候不能继续生成新的 repair。
+
+---
+
+RaptorQ WASM build 的 bulk-memory / wasm-opt 问题：
+
+Colab 里 `wasm-pack build --release --target web` 已经能完成 Rust 编译，但 wasm-pack 后处理阶段调用内置 `wasm-opt` 时会失败：
+
+`Bulk memory operations require bulk memory [--enable-bulk-memory]`
+
+原因是 Rust/wasm-bindgen 生成的 wasm 里包含 `memory.copy` / `memory.fill` 这类 bulk-memory 指令，但当前 wasm-pack 下载的 Binaryen/wasm-opt validator 没有用 bulk-memory feature 运行。这个问题发生在优化/校验阶段，不是 RaptorQ Rust 代码编译失败。
+
+当前临时处理是在生成 wrapper crate 的 `Cargo.toml` 里加入：
+
+```toml
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+```
+
+影响：
+正确性基本不受影响，wasm-bindgen glue 和 wasm 仍然可用。
+包体可能偏大，启动/执行可能少一点优化收益。
+现代浏览器一般支持 bulk-memory，实际兼容性风险主要在非常旧的浏览器。
+
+后续可优化：
+尝试安装新版 Binaryen，并让 wasm-opt 以支持 bulk-memory 的参数运行。
+或者确认是否能通过 Rust 编译参数生成不依赖 bulk-memory 的 wasm，但这可能牺牲性能/体积。
+拿到真实 artifact 后固定跑 `pnpm verify:raptorq-wasm`，确认 init / encode / decode roundtrip 都正常。

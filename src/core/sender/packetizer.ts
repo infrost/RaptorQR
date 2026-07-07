@@ -35,6 +35,12 @@ export interface PacketizerOptions {
   symbolSize?: number;
 }
 
+export interface PreprocessResult {
+  data: Uint8Array;
+  dataLength: number;
+  isCompressed: boolean;
+}
+
 // ─── Packetizer ──────────────────────────────────────────────────────────────
 
 /**
@@ -56,51 +62,13 @@ export function packetize(
   options: PacketizerOptions = {},
 ): PacketizerResult {
   const symbolSize = normalizeSymbolSize(options.symbolSize);
-
-  // 1. Optional metadata wrapping for files
-  let wrapped: Uint8Array;
-  if (!isText && filename) {
-    const nameBytes = new TextEncoder().encode(filename);
-    const mimeBytes = new TextEncoder().encode(mimeType || 'application/octet-stream');
-    const nameLen = Math.min(nameBytes.length, 255);
-    const mimeLen = Math.min(mimeBytes.length, 255);
-    wrapped = new Uint8Array(2 + nameLen + mimeLen + data.length);
-    let off = 0;
-    wrapped[off++] = nameLen;
-    wrapped.set(nameBytes.slice(0, nameLen), off);
-    off += nameLen;
-    wrapped[off++] = mimeLen;
-    wrapped.set(mimeBytes.slice(0, mimeLen), off);
-    off += mimeLen;
-    wrapped.set(data, off);
-  } else {
-    wrapped = new Uint8Array(data);
-  }
-
-  // 2. Optional compression
-  let preprocessed: Uint8Array;
-  let isCompressed: boolean;
-
-  if (compress && wrapped.length > 64) {
-    const compressed = deflateSync(wrapped);
-    if (compressed.length < wrapped.length) {
-      preprocessed = compressed;
-      isCompressed = true;
-    } else {
-      preprocessed = new Uint8Array(wrapped);
-      isCompressed = false;
-    }
-  } else {
-    preprocessed = new Uint8Array(wrapped);
-    isCompressed = false;
-  }
-
-  const dataLength = preprocessed.length;
+  const preprocessed = preprocessPayload(data, isText, compress, filename, mimeType);
+  const dataLength = preprocessed.dataLength;
 
   // 3. Split into fixed-size symbols
   const symbols: Uint8Array[] = [];
   for (let offset = 0; offset < dataLength; offset += symbolSize) {
-    const chunk = preprocessed.slice(offset, offset + symbolSize);
+    const chunk = preprocessed.data.slice(offset, offset + symbolSize);
     if (chunk.length < symbolSize) {
       const padded = new Uint8Array(symbolSize);
       padded.set(chunk);
@@ -160,7 +128,7 @@ export function packetize(
         symbolIndex: cs.sourceIndex,
         isText,
         isLastGeneration: isLastGen,
-        compressed: isCompressed,
+        compressed: preprocessed.isCompressed,
         dataLength,
       };
       packets.push(createPacket(header, cs.data));
@@ -175,7 +143,7 @@ export function packetize(
         symbolIndex: 16 + j,
         isText,
         isLastGeneration: isLastGen,
-        compressed: isCompressed,
+        compressed: preprocessed.isCompressed,
         dataLength,
       };
       packets.push(createPacket(header, cs.data));
@@ -188,8 +156,52 @@ export function packetize(
     sourceGenerations,
     dataLength,
     isText,
-    isCompressed,
+    isCompressed: preprocessed.isCompressed,
     symbolSize,
+  };
+}
+
+export function preprocessPayload(
+  data: Uint8Array,
+  isText: boolean,
+  compress: boolean,
+  filename?: string,
+  mimeType?: string,
+): PreprocessResult {
+  let wrapped: Uint8Array;
+  if (!isText && filename) {
+    const nameBytes = new TextEncoder().encode(filename);
+    const mimeBytes = new TextEncoder().encode(mimeType || 'application/octet-stream');
+    const nameLen = Math.min(nameBytes.length, 255);
+    const mimeLen = Math.min(mimeBytes.length, 255);
+    wrapped = new Uint8Array(2 + nameLen + mimeLen + data.length);
+    let off = 0;
+    wrapped[off++] = nameLen;
+    wrapped.set(nameBytes.slice(0, nameLen), off);
+    off += nameLen;
+    wrapped[off++] = mimeLen;
+    wrapped.set(mimeBytes.slice(0, mimeLen), off);
+    off += mimeLen;
+    wrapped.set(data, off);
+  } else {
+    wrapped = new Uint8Array(data);
+  }
+
+  if (compress && wrapped.length > 64) {
+    const compressed = deflateSync(wrapped);
+    if (compressed.length < wrapped.length) {
+      return {
+        data: compressed,
+        dataLength: compressed.length,
+        isCompressed: true,
+      };
+    }
+  }
+
+  return {
+    data: new Uint8Array(wrapped),
+    dataLength: wrapped.length,
+    isCompressed: false,
   };
 }
 

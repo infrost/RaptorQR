@@ -25,6 +25,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:raptorq-wasm": "node scripts/verify-raptorq-wasm.mjs",
     "cli": "bun run src/cli/qr-stream.ts",
     "cli:file": "bun run src/cli/qr-stream.ts",
     "build:cli": "esbuild src/cli/qr-stream.ts --bundle --platform=node --target=node18 --outfile=dist/qr-stream.js --format=esm --external:node:*",

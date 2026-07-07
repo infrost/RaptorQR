@@ -15,19 +15,24 @@ import {
   normalizeDecodeSettings,
   type QrDecodeSettings,
 } from '@/core/qr/decode_settings';
-import { parsePacket } from '@/core/protocol/packet';
+import { packetCodec, parsePacket, type TransportCodec } from '@/core/protocol/packet';
 import type { Packet } from '@/core/protocol/packet';
 import { K, sourceGenerationsFromDataLength } from '@/core/protocol/constants';
+import {
+  DEFAULT_RECEIVER_FEC_CODEC,
+  normalizeReceiverFecCodec,
+  type ReceiverFecCodec,
+} from '@/core/fec/codec';
+import { RaptorQWasmDecoder } from '@/core/fec/raptorq_wasm';
 import { GenerationDecoder } from '@/core/fec/rlnc_decoder';
 import { assemblePayload } from '@/core/reconstruct/assemble';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
-interface DecodeState {
-  decoder: GenerationDecoder;
+interface BaseDecodeState {
+  codec: TransportCodec;
   dedup: Set<string>;
   receivedPackets: number;
-  solvedGenerations: Set<number>;
   totalGenerations: number;
   sourceGenerations: number;
   dataLength: number;
@@ -43,6 +48,19 @@ interface DecodeState {
   };
 }
 
+interface RlncDecodeState extends BaseDecodeState {
+  codec: 'js-rlnc';
+  decoder: GenerationDecoder;
+  solvedGenerations: Set<number>;
+}
+
+interface RaptorQDecodeState extends BaseDecodeState {
+  codec: 'wasm-raptorq';
+  decoder: RaptorQWasmDecoder | null;
+}
+
+type DecodeState = RlncDecodeState | RaptorQDecodeState;
+
 interface QueuedFrame {
   imageData: ImageData;
   realtime: boolean;
@@ -55,6 +73,9 @@ let current: DecodeState | null = null;
 let frameQueue: QueuedFrame[] = [];
 let processingQueue = false;
 let decodeSettings: QrDecodeSettings = DEFAULT_DECODE_SETTINGS;
+let receiverFecCodec: ReceiverFecCodec = DEFAULT_RECEIVER_FEC_CODEC;
+let codecMismatchReported = false;
+let raptorqUnavailableReported = false;
 
 // ─── Worker handler ───────────────────────────────────────────────────────────
 
@@ -64,11 +85,14 @@ self.onmessage = (e: MessageEvent) => {
   if (msg.type === 'reset') {
     current = null;
     frameQueue = [];
+    codecMismatchReported = false;
+    raptorqUnavailableReported = false;
     return;
   }
 
   if (msg.type === 'settings') {
     decodeSettings = normalizeDecodeSettings(msg.settings);
+    receiverFecCodec = normalizeReceiverFecCodec(msg.fecCodec);
     return;
   }
 
@@ -148,7 +172,8 @@ async function handleFrame(imageData: ImageData): Promise<void> {
       continue;
     }
 
-    processDecodedPacket(decoded, packet, processedPackets === 0);
+    const processed = await processDecodedPacket(decoded, packet, processedPackets === 0);
+    if (!processed) continue;
     processedPackets++;
 
     if (current?.completed) {
@@ -169,11 +194,29 @@ function maxSymbolsForNextScan(): number {
   return MAX_QR_SYMBOLS_PER_FRAME;
 }
 
-function processDecodedPacket(
+async function processDecodedPacket(
   decoded: QrDecodeResult,
   packet: Packet,
   countFrame: boolean,
-): void {
+): Promise<boolean> {
+  const codec = packetCodec(packet.header);
+  if (!codecAllowed(codec)) {
+    reportCodecMismatch(codec);
+    return false;
+  }
+
+  if (codec === 'wasm-raptorq') {
+    return processRaptorQPacket(decoded, packet, countFrame);
+  }
+
+  return processRlncPacket(decoded, packet, countFrame);
+}
+
+function processRlncPacket(
+  decoded: QrDecodeResult,
+  packet: Packet,
+  countFrame: boolean,
+): boolean {
   const h = packet.header;
 
   // Start fresh on first valid packet
@@ -181,6 +224,7 @@ function processDecodedPacket(
     const symbolSize = packet.payload.length;
     const sourceGens = sourceGenerationsFromDataLength(h.dataLength, symbolSize);
     current = {
+      codec: 'js-rlnc',
       decoder: new GenerationDecoder(K, symbolSize),
       dedup: new Set(),
       receivedPackets: 0,
@@ -197,7 +241,12 @@ function processDecodedPacket(
     };
   }
 
-  if (current.completed) return;
+  if (current.codec !== 'js-rlnc') {
+    reportCodecMismatch('js-rlnc');
+    return false;
+  }
+
+  if (current.completed) return true;
 
   if (countFrame) {
     current.stats.totalFrames++;
@@ -222,7 +271,7 @@ function processDecodedPacket(
 
   // Dedup: generationIndex:symbolIndex
   const dedupKey = `${h.generationIndex}:${h.symbolIndex}`;
-  if (current.dedup.has(dedupKey)) return;
+  if (current.dedup.has(dedupKey)) return true;
   current.dedup.add(dedupKey);
 
   // Feed to decoder
@@ -246,15 +295,100 @@ function processDecodedPacket(
       // We only need sourceGenerations generations solved (any mix of source + parity)
       if (current.solvedGenerations.size >= current.sourceGenerations) {
         reconstructData(current);
-        if (current.completed) return;
+        if (current.completed) return true;
       }
     }
   }
+
+  return true;
+}
+
+async function processRaptorQPacket(
+  decoded: QrDecodeResult,
+  packet: Packet,
+  countFrame: boolean,
+): Promise<boolean> {
+  const h = packet.header;
+
+  if (!current) {
+    const symbolSize = packet.payload.length;
+    const sourceSymbols = Math.max(1, Math.ceil(h.dataLength / Math.max(1, symbolSize - 4)));
+    current = {
+      codec: 'wasm-raptorq',
+      decoder: null,
+      dedup: new Set(),
+      receivedPackets: 0,
+      totalGenerations: h.totalGenerations,
+      sourceGenerations: sourceSymbols,
+      dataLength: h.dataLength,
+      symbolSize,
+      qrVersion: decoded.version,
+      isText: h.isText,
+      isCompressed: h.compressed,
+      completed: false,
+      stats: { totalFrames: 0, framesWithQR: 0, acceptedPackets: 0 },
+    };
+  }
+
+  if (current.codec !== 'wasm-raptorq') {
+    reportCodecMismatch('wasm-raptorq');
+    return false;
+  }
+
+  if (current.completed) return true;
+
+  if (countFrame) {
+    current.stats.totalFrames++;
+  }
+
+  if (packet.payload.length !== current.symbolSize) {
+    throw new Error(
+      `RaptorQ payload size changed from ${current.symbolSize} to ${packet.payload.length} bytes. ` +
+      'Restart the scan before switching QR size.',
+    );
+  }
+
+  current.totalGenerations = h.totalGenerations;
+  current.dataLength = h.dataLength;
+  current.sourceGenerations = Math.max(
+    1,
+    Math.ceil(h.dataLength / Math.max(1, current.symbolSize - 4)),
+  );
+  current.qrVersion = decoded.version;
+  current.isText = h.isText;
+  current.isCompressed = h.compressed;
+  current.stats.framesWithQR++;
+
+  const dedupKey = raptorQPayloadId(packet.payload);
+  if (current.dedup.has(dedupKey)) return true;
+  current.dedup.add(dedupKey);
+  current.stats.acceptedPackets++;
+  current.receivedPackets++;
+
+  try {
+    if (!current.decoder) {
+      current.decoder = await RaptorQWasmDecoder.create(current.dataLength, current.symbolSize);
+    }
+    const preprocessed = current.decoder.push(packet.payload);
+    if (preprocessed) {
+      completeDecodedPayload(current, preprocessed);
+    }
+  } catch (err: any) {
+    if (!raptorqUnavailableReported) {
+      raptorqUnavailableReported = true;
+      self.postMessage({
+        type: 'error',
+        message: `RaptorQ WASM unavailable: ${err.message ?? String(err)}`,
+      });
+    }
+  }
+
+  return true;
 }
 
 // ─── Reconstruct original data from all source symbols ────────────────────────
 
-function reconstructData(state: DecodeState): void {
+function reconstructData(state: RlncDecodeState): void {
   const decoder = state.decoder;
 
   // Build solved generations map for assemblePayload
@@ -288,6 +422,13 @@ function reconstructData(state: DecodeState): void {
     return;
   }
 
+  completeDecodedPayload(state, preprocessed);
+}
+
+function completeDecodedPayload(
+  state: Pick<DecodeState, 'isText' | 'isCompressed' | 'completed'>,
+  preprocessed: Uint8Array,
+): void {
   // Decompress if needed
   let finalData: Uint8Array;
   if (state.isCompressed) {
@@ -356,10 +497,14 @@ function reconstructData(state: DecodeState): void {
 
 function reportProgress(state: DecodeState): void {
   const totalGens = state.totalGenerations;
-  const solvedGens = state.solvedGenerations.size;
+  const solvedGens = state.codec === 'js-rlnc'
+    ? state.solvedGenerations.size
+    : state.completed ? 1 : 0;
   const decodedPackets = state.stats.framesWithQR;
   const uniquePackets = state.dedup.size;
-  const needed = state.sourceGenerations > 0 ? K * state.sourceGenerations : 0;
+  const needed = state.codec === 'js-rlnc'
+    ? state.sourceGenerations > 0 ? K * state.sourceGenerations : 0
+    : state.sourceGenerations;
 
   self.postMessage({
     type: 'progress',
@@ -376,8 +521,31 @@ function reportProgress(state: DecodeState): void {
     dataLength: state.dataLength,
     symbolSize: state.symbolSize,
     qrVersion: state.qrVersion,
-    status: totalGens > 0
+    fecCodec: state.codec,
+    status: state.codec === 'wasm-raptorq'
+      ? `Receiving RaptorQ (${uniquePackets}/${needed} packets)`
+      : totalGens > 0
       ? `Receiving (${solvedGens}/${state.sourceGenerations} gens)`
       : 'Receiving…',
   });
+}
+
+function codecAllowed(codec: TransportCodec): boolean {
+  return receiverFecCodec === 'auto' || receiverFecCodec === codec;
+}
+
+function reportCodecMismatch(codec: TransportCodec): void {
+  if (codecMismatchReported) return;
+  codecMismatchReported = true;
+  self.postMessage({
+    type: 'error',
+    message: `Received ${codec} packet while FEC codec is set to ${receiverFecCodec}.`,
+  });
+}
+
+function raptorQPayloadId(payload: Uint8Array): string {
+  if (payload.length < 4) {
+    throw new Error('RaptorQ packet payload is too short for a payload id.');
+  }
+  return `${payload[0]}:${payload[1]}:${payload[2]}:${payload[3]}`;
 }

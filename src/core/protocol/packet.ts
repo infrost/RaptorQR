@@ -22,13 +22,16 @@
  * Symbol index convention:
  *   0–15   = systematic symbol (sourceIndex = symbolIndex)
  *   16–23  = coded symbol (codedSymbolIndex = symbolIndex - 16)
- *   24–31  = reserved
+ *   31     = RaptorQ WASM packet sentinel
+ *   other values are reserved
  *
  * @module
  */
 
-import { MAGIC_BYTE, HEADER_SIZE, CRC32C_SIZE } from './constants';
+import { MAGIC_BYTE, HEADER_SIZE, CRC32C_SIZE, RAPTORQ_SYMBOL_INDEX } from './constants';
 import { crc32c } from './crc32c';
+
+export type TransportCodec = 'js-rlnc' | 'wasm-raptorq';
 
 // ─── Little-endian helpers ───────────────────────────────────────────────────
 
@@ -195,4 +198,8 @@ export function parsePacket(data: Uint8Array): Packet {
   }
 
   return { header, payload };
+}
+
+export function packetCodec(header: PacketHeader): TransportCodec {
+  return header.symbolIndex === RAPTORQ_SYMBOL_INDEX ? 'wasm-raptorq' : 'js-rlnc';
 }
