@@ -4,6 +4,7 @@
   "private": true,
   "description": "High-throughput QR transfer toolkit and web app",
   "type": "module",
+  "packageManager": "pnpm@10.15.1",
   "engines": {
     "node": ">=18"
   },
