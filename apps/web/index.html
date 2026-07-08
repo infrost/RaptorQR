@@ -3,14 +3,84 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./raptorqr.svg" type="image/svg+xml" />
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { background: #0d1117; }
+      #root { min-height: 100vh; }
+      .boot-shell {
+        min-height: 100vh;
+        background: #0d1117;
+        color: #f0f6fc;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .boot-panel { width: min(440px, 100%); }
+      .boot-title {
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .boot-body {
+        color: #8b949e;
+        font-size: 15px;
+        line-height: 1.5;
+        margin-bottom: 22px;
+      }
+      .boot-progress {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: #21262d;
+        border: 1px solid #30363d;
+      }
+      .boot-progress-fill {
+        width: 18%;
+        height: 100%;
+        background: #58a6ff;
+      }
+      .boot-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 10px;
+        color: #8b949e;
+        font-size: 13px;
+      }
     </style>
     <title>RaptorQR</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="boot-shell">
+        <section class="boot-panel" aria-label="RaptorQR startup">
+          <h1 class="boot-title">RaptorQR</h1>
+          <p class="boot-body">
+            Preparing runtime assets for offline use. The app will open after the required WASM files are ready.
+          </p>
+          <div
+            class="boot-progress"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <div class="boot-progress-fill"></div>
+          </div>
+          <div class="boot-meta">
+            <span>app shell</span>
+            <span>starting</span>
+          </div>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

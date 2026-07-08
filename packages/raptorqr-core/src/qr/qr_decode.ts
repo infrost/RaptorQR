@@ -10,7 +10,7 @@ import {
   readBarcodes,
   type ReaderOptions,
 } from 'zxing-wasm/reader';
-import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
+import { zxingReaderWasmUrl } from '@raptorqr/core/qr/zxing_assets';
 import {
   DECODE_PRESETS,
   DEFAULT_DECODE_SETTINGS,

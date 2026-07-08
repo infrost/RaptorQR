@@ -248,7 +248,7 @@ const S = {
 // ─── Component ───────────────────────────────────────────────────────────────────
 
 export function SenderPage() {
-  const [mode, setMode] = useState<InputMode>('text');
+  const [mode, setMode] = useState<InputMode>('file');
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [encodingLive, setEncodingLive] = useState(false);
@@ -961,8 +961,8 @@ export function SenderPage() {
         <div style={S.row}>
           <span style={S.label}>Input mode</span>
           <div style={S.toggleGroup}>
-            <button style={S.toggleBtn(mode === 'text')} onClick={() => handleModeChange('text')}>Text</button>
             <button style={S.toggleBtn(mode === 'file')} onClick={() => handleModeChange('file')}>File</button>
+            <button style={S.toggleBtn(mode === 'text')} onClick={() => handleModeChange('text')}>Text</button>
           </div>
         </div>
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="RaptorQR">
+  <rect width="128" height="128" rx="24" fill="#0d1117"/>
+  <rect x="20" y="20" width="32" height="32" rx="6" fill="#f0f6fc"/>
+  <rect x="28" y="28" width="16" height="16" rx="3" fill="#0d1117"/>
+  <rect x="76" y="20" width="32" height="32" rx="6" fill="#f0f6fc"/>
+  <rect x="84" y="28" width="16" height="16" rx="3" fill="#0d1117"/>
+  <rect x="20" y="76" width="32" height="32" rx="6" fill="#f0f6fc"/>
+  <rect x="28" y="84" width="16" height="16" rx="3" fill="#0d1117"/>
+  <path d="M66 66h16v10H66zM88 64h20v12H88zM64 84h12v24H64zM82 84h10v10H82zM98 84h10v24H98zM82 100h10v8H82z" fill="#58a6ff"/>
+  <path d="M60 20h8v28h-8zM20 60h28v8H20zM60 60h12v8H60z" fill="#2ea043"/>
+</svg>

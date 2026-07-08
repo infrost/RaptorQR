@@ -12,7 +12,7 @@ import {
   type BarcodeSymbol,
   type WriterOptions,
 } from 'zxing-wasm/writer';
-import zxingWriterWasmUrl from 'zxing-wasm/writer/zxing_writer.wasm?url';
+import { zxingWriterWasmUrl } from '@raptorqr/core/qr/zxing_assets';
 import {
   getMaxZXingWriterByteCapacity,
   type EccLevel,
