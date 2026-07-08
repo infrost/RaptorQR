@@ -34,6 +34,7 @@ import {
   normalizeRaptorQRepairPercent,
   type FecCodec,
 } from '@/core/fec/codec';
+import { QrWorkerPool } from '@/core/qr/qr_worker_pool';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -76,10 +77,6 @@ interface FrameCache {
   maxEntries: number;
 }
 
-type RenderWorkerMessage =
-  | { type: 'tile'; requestId: number; packetIndex: number; imageData: ImageData }
-  | { type: 'done'; requestId: number }
-  | { type: 'error'; requestId: number; packetIndex?: number; message: string };
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -285,8 +282,10 @@ export function SenderPage() {
   const liveTransferRef = useRef<LiveTransfer | null>(null);
   const encodeWorkerRef = useRef<Worker | null>(null);
   const gifWorkerRef = useRef<Worker | null>(null);
-  const qrRenderWorkerRef = useRef<Worker | null>(null);
-  const playbackTimerRef = useRef<number | null>(null);
+  const qrRenderPoolRef = useRef<QrWorkerPool | null>(null);
+  const rafHandleRef = useRef<number | null>(null);
+  const rafLastTsRef = useRef<number | null>(null);
+  const rafAccRef = useRef(0);
   const liveFrameIndexRef = useRef(0);
   const frameRateFpsRef = useRef(DEFAULT_FRAME_RATE_FPS);
   const frameCacheRef = useRef<FrameCache>(createFrameCache());
@@ -300,10 +299,13 @@ export function SenderPage() {
   const frameDelayMs = frameRateToDelayMs(frameRateFps);
 
   const clearPlaybackTimer = useCallback(() => {
-    if (playbackTimerRef.current !== null) {
-      window.clearTimeout(playbackTimerRef.current);
-      playbackTimerRef.current = null;
+    if (rafHandleRef.current !== null) {
+      window.cancelAnimationFrame(rafHandleRef.current);
+      rafHandleRef.current = null;
     }
+
+    rafLastTsRef.current = null;
+    rafAccRef.current = 0;
   }, []);
 
   const terminateEncodeWorker = useCallback(() => {
@@ -316,10 +318,10 @@ export function SenderPage() {
     gifWorkerRef.current = null;
   }, []);
 
-  const terminateQRRenderWorker = useCallback(() => {
+  const terminateQRRenderPool = useCallback(() => {
     qrRenderRequestIdRef.current++;
-    qrRenderWorkerRef.current?.terminate();
-    qrRenderWorkerRef.current = null;
+    qrRenderPoolRef.current?.terminate();
+    qrRenderPoolRef.current = null;
   }, []);
 
   const updateLiveStats = useCallback(() => {
@@ -361,12 +363,19 @@ export function SenderPage() {
     transfer: LiveTransfer,
     startFrameIndex: number,
   ) => {
-    const worker = qrRenderWorkerRef.current;
-    if (!worker) return;
+    const pool = qrRenderPoolRef.current;
+    if (!pool) return;
 
     const renderWindowFrames = getRenderWindowDisplayFrames(transfer, frameCacheRef.current);
     const maxOutstandingPackets = getMaxOutstandingRenderPackets(transfer, frameCacheRef.current);
-    pruneFrameCacheForPlaybackWindow(frameCacheRef.current, transfer, startFrameIndex, renderWindowFrames);
+
+    pruneFrameCacheForPlaybackWindow(
+      frameCacheRef.current,
+      transfer,
+      startFrameIndex,
+      renderWindowFrames,
+    );
+
     pruneRequestedPacketsForPlaybackWindow(
       requestedPacketImagesRef.current,
       transfer,
@@ -377,6 +386,7 @@ export function SenderPage() {
     let availableSlots = maxOutstandingPackets
       - frameCacheRef.current.frames.size
       - requestedPacketImagesRef.current.size;
+
     if (availableSlots <= 0) return;
 
     const missingPacketIndexes: number[] = [];
@@ -384,12 +394,14 @@ export function SenderPage() {
 
     for (let frameIndex = startFrameIndex; frameIndex < endFrameIndex; frameIndex++) {
       const normalizedFrameIndex = frameIndex % transfer.displayFrameCount;
+
       for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
         const packetIndex = getPacketIndexForDisplayFrame(
           transfer,
           normalizedFrameIndex,
           tileIndex,
         );
+
         if (packetIndex === null) continue;
         if (frameCacheRef.current.frames.has(packetIndex)) continue;
         if (requestedPacketImagesRef.current.has(packetIndex)) continue;
@@ -397,10 +409,12 @@ export function SenderPage() {
         requestedPacketImagesRef.current.add(packetIndex);
         missingPacketIndexes.push(packetIndex);
         availableSlots--;
+
         if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
           break;
         }
       }
+
       if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
         break;
       }
@@ -409,47 +423,143 @@ export function SenderPage() {
     if (missingPacketIndexes.length === 0) return;
 
     const requestId = qrRenderRequestIdRef.current;
-    worker.postMessage({
-      type: 'renderTiles',
-      requestId,
-      qrVersion: transfer.version,
-      eccLevel: transfer.eccLevel,
-      qrEncoder: transfer.qrEncoder,
-      tiles: missingPacketIndexes.map((packetIndex) => ({
-        packetIndex,
-        packet: transfer.packets[packetIndex]!,
-      })),
-    });
+
+    for (const packetIndex of missingPacketIndexes) {
+      const packet = transfer.packets[packetIndex];
+
+      if (!packet) {
+        requestedPacketImagesRef.current.delete(packetIndex);
+        continue;
+      }
+
+      pool
+        .render(
+          packet,
+          transfer.version,
+          transfer.eccLevel,
+          transfer.scale,
+          transfer.qrEncoder,
+        )
+        .then(async (imageData) => {
+          requestedPacketImagesRef.current.delete(packetIndex);
+
+          if (requestId !== qrRenderRequestIdRef.current) return;
+
+          const activeTransfer = liveTransferRef.current;
+          if (!activeTransfer) return;
+
+          const currentFrameIndex =
+            liveFrameIndexRef.current % activeTransfer.displayFrameCount;
+
+          const activeRenderWindowFrames = getRenderWindowDisplayFrames(
+            activeTransfer,
+            frameCacheRef.current,
+          );
+
+          if (!isPacketInPlaybackWindow(
+            activeTransfer,
+            packetIndex,
+            currentFrameIndex,
+            activeRenderWindowFrames,
+          )) {
+            return;
+          }
+
+          const renderedTile = await prepareRenderedTile(imageData);
+
+          if (requestId !== qrRenderRequestIdRef.current) {
+            closeRenderedTile(renderedTile);
+            return;
+          }
+
+          if (!isPacketInPlaybackWindow(
+            activeTransfer,
+            packetIndex,
+            liveFrameIndexRef.current % activeTransfer.displayFrameCount,
+            activeRenderWindowFrames,
+          )) {
+            closeRenderedTile(renderedTile);
+            return;
+          }
+
+          cacheRenderedTile(frameCacheRef.current, packetIndex, renderedTile);
+          trimFrameCache(frameCacheRef.current, activeTransfer, liveFrameIndexRef.current);
+        })
+        .catch((err: unknown) => {
+          requestedPacketImagesRef.current.delete(packetIndex);
+
+          if (requestId !== qrRenderRequestIdRef.current) return;
+
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    }
   }, []);
 
-  const scheduleNextLiveFrame = useCallback(() => {
-    clearPlaybackTimer();
-    const delayMs = frameRateToDelayMs(frameRateFpsRef.current);
+  const runRafLoop = useCallback((timestamp: number) => {
+    const transfer = liveTransferRef.current;
+    const canvas = canvasRef.current;
 
-    playbackTimerRef.current = window.setTimeout(() => {
-      const transfer = liveTransferRef.current;
-      const canvas = canvasRef.current;
-      if (!transfer || !canvas) return;
+    if (!transfer || !canvas) {
+      rafHandleRef.current = null;
+      return;
+    }
+
+    const frameInterval = frameRateToDelayMs(frameRateFpsRef.current);
+
+    if (rafLastTsRef.current === null) {
+      rafLastTsRef.current = timestamp;
+      rafAccRef.current = Math.max(rafAccRef.current, frameInterval);
+    } else {
+      rafAccRef.current += timestamp - rafLastTsRef.current;
+      rafLastTsRef.current = timestamp;
+    }
+
+    let advanced = 0;
+
+    while (rafAccRef.current >= frameInterval && advanced < 2) {
+      const frameIndex = liveFrameIndexRef.current % transfer.displayFrameCount;
+
+      requestRenderWindow(transfer, frameIndex);
+
+      if (!isDisplayFrameReady(transfer, frameIndex, frameCacheRef.current)) {
+        rafAccRef.current = Math.min(rafAccRef.current, frameInterval);
+        break;
+      }
+
+      rafAccRef.current -= frameInterval;
 
       try {
-        const frameIndex = liveFrameIndexRef.current % transfer.displayFrameCount;
-        requestRenderWindow(transfer, frameIndex);
-        if (!isDisplayFrameReady(transfer, frameIndex, frameCacheRef.current)) {
-          scheduleNextLiveFrame();
-          return;
+        drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
+      } catch (err: unknown) {
+        if (rafHandleRef.current !== null) {
+          window.cancelAnimationFrame(rafHandleRef.current);
+          rafHandleRef.current = null;
         }
 
-        drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
-        recordLiveFrameDraw();
-        requestRenderWindow(transfer, frameIndex + 1);
-        liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
-        scheduleNextLiveFrame();
-      } catch (err: any) {
-        clearPlaybackTimer();
-        setError(err.message ?? String(err));
+        rafLastTsRef.current = null;
+        rafAccRef.current = 0;
+
+        setError(err instanceof Error ? err.message : String(err));
+        return;
       }
-    }, delayMs);
-  }, [clearPlaybackTimer, recordLiveFrameDraw, requestRenderWindow]);
+
+      if (!playbackStartedRef.current) {
+        playbackStartedRef.current = true;
+        setStatus(
+          `Live QR running (${transfer.packets.length} packets, ` +
+          `${transfer.parallelCount} per tick).`,
+        );
+      }
+
+      recordLiveFrameDraw();
+
+      requestRenderWindow(transfer, frameIndex + 1);
+      liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
+      advanced++;
+    }
+
+    rafHandleRef.current = window.requestAnimationFrame(runRafLoop);
+  }, [recordLiveFrameDraw, requestRenderWindow]);
 
   const startLivePlayback = useCallback((resetIndex: boolean) => {
     clearPlaybackTimer();
@@ -464,17 +574,10 @@ export function SenderPage() {
 
     const frameIndex = liveFrameIndexRef.current % transfer.displayFrameCount;
     requestRenderWindow(transfer, frameIndex);
-    if (!isDisplayFrameReady(transfer, frameIndex, frameCacheRef.current)) {
-      scheduleNextLiveFrame();
-      return;
-    }
 
-    drawLiveFrame(canvas, transfer, frameIndex, frameCacheRef.current);
-    recordLiveFrameDraw();
-    requestRenderWindow(transfer, frameIndex + 1);
-    liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
-    scheduleNextLiveFrame();
-  }, [clearPlaybackTimer, recordLiveFrameDraw, requestRenderWindow, scheduleNextLiveFrame]);
+    rafAccRef.current = frameRateToDelayMs(frameRateFpsRef.current);
+    rafHandleRef.current = window.requestAnimationFrame(runRafLoop);
+  }, [clearPlaybackTimer, requestRenderWindow, runRafLoop]);
 
   useEffect(() => {
     frameRateFpsRef.current = frameRateFps;
@@ -498,104 +601,42 @@ export function SenderPage() {
 
   useEffect(() => {
     liveTransferRef.current = liveTransfer;
+
     clearFrameCache(frameCacheRef.current);
     requestedPacketImagesRef.current.clear();
     playbackStartedRef.current = false;
+
     resetLiveStats();
     clearPlaybackTimer();
-    terminateQRRenderWorker();
+    terminateQRRenderPool();
 
     if (!liveTransfer) {
       return clearPlaybackTimer;
     }
 
-    const requestId = ++qrRenderRequestIdRef.current;
-    const worker = new Worker(
-      new URL('@/workers/qr_render.worker.ts', import.meta.url),
-      { type: 'module' },
-    );
-    qrRenderWorkerRef.current = worker;
+    qrRenderRequestIdRef.current++;
+
+    const pool = new QrWorkerPool(liveTransfer.parallelCount);
+    qrRenderPoolRef.current = pool;
+
     setStatus('Rendering first QR frame…');
 
-    worker.onmessage = (e: MessageEvent<RenderWorkerMessage>) => {
-      const msg = e.data;
-      if (msg.requestId !== qrRenderRequestIdRef.current) return;
-
-      if (msg.type === 'tile') {
-        void (async () => {
-          try {
-            requestedPacketImagesRef.current.delete(msg.packetIndex);
-
-            const activeTransfer = liveTransferRef.current;
-            if (!activeTransfer) return;
-
-            const currentFrameIndex = liveFrameIndexRef.current % activeTransfer.displayFrameCount;
-            const renderWindowFrames = getRenderWindowDisplayFrames(activeTransfer, frameCacheRef.current);
-            if (!isPacketInPlaybackWindow(
-              activeTransfer,
-              msg.packetIndex,
-              currentFrameIndex,
-              renderWindowFrames,
-            )) {
-              return;
-            }
-
-            const renderedTile = await prepareRenderedTile(msg.imageData);
-            if (msg.requestId !== qrRenderRequestIdRef.current) {
-              closeRenderedTile(renderedTile);
-              return;
-            }
-
-            if (!isPacketInPlaybackWindow(
-              activeTransfer,
-              msg.packetIndex,
-              liveFrameIndexRef.current % activeTransfer.displayFrameCount,
-              renderWindowFrames,
-            )) {
-              closeRenderedTile(renderedTile);
-              return;
-            }
-
-            cacheRenderedTile(frameCacheRef.current, msg.packetIndex, renderedTile);
-            trimFrameCache(frameCacheRef.current, activeTransfer, liveFrameIndexRef.current);
-
-            if (!playbackStartedRef.current && isDisplayFrameReady(activeTransfer, 0, frameCacheRef.current)) {
-              playbackStartedRef.current = true;
-              setStatus(
-                `Live QR running (${activeTransfer.packets.length} packets, ` +
-                `${activeTransfer.parallelCount} per tick).`,
-              );
-              startLivePlayback(true);
-            }
-          } catch (err: any) {
-            requestedPacketImagesRef.current.delete(msg.packetIndex);
-            setError(err.message ?? String(err));
-          }
-        })();
-        return;
-      }
-
-      if (msg.type === 'error') {
-        requestedPacketImagesRef.current.delete(msg.packetIndex ?? -1);
-        setError(msg.message);
-      }
-    };
-
-    worker.onerror = (err) => {
-      setError(err.message || 'QR render worker failed.');
-    };
-
     requestRenderWindow(liveTransfer, 0);
+    startLivePlayback(true);
 
     return () => {
       qrRenderRequestIdRef.current++;
       clearPlaybackTimer();
-      if (qrRenderWorkerRef.current === worker) {
-        qrRenderWorkerRef.current = null;
+
+      if (qrRenderPoolRef.current === pool) {
+        qrRenderPoolRef.current = null;
       }
-      worker.terminate();
+
+      pool.terminate();
+
       requestedPacketImagesRef.current.clear();
       playbackStartedRef.current = false;
+
       clearFrameCache(frameCacheRef.current);
       resetLiveStats();
     };
@@ -605,7 +646,7 @@ export function SenderPage() {
     requestRenderWindow,
     resetLiveStats,
     startLivePlayback,
-    terminateQRRenderWorker,
+    terminateQRRenderPool,
   ]);
 
   /** Wipe all output state and stop any live playback loop. */
@@ -613,7 +654,7 @@ export function SenderPage() {
     runIdRef.current++;
     terminateEncodeWorker();
     terminateGifWorker();
-    terminateQRRenderWorker();
+    terminateQRRenderPool();
     clearPlaybackTimer();
     liveTransferRef.current = null;
     liveFrameIndexRef.current = 0;
@@ -628,7 +669,7 @@ export function SenderPage() {
     setPreparingGif(false);
     setError('');
     setStatus('');
-  }, [clearPlaybackTimer, resetLiveStats, terminateEncodeWorker, terminateGifWorker, terminateQRRenderWorker]);
+  }, [clearPlaybackTimer, resetLiveStats, terminateEncodeWorker, terminateGifWorker, terminateQRRenderPool]);
 
   const handleStopTransfer = useCallback(() => {
     resetOutput();

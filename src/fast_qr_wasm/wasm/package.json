@@ -1,0 +1,15 @@
+{
+  "name": "qrstream_fast_qr_wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "qrstream_fast_qr_wasm_bg.wasm",
+    "qrstream_fast_qr_wasm.js",
+    "qrstream_fast_qr_wasm.d.ts"
+  ],
+  "main": "qrstream_fast_qr_wasm.js",
+  "types": "qrstream_fast_qr_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

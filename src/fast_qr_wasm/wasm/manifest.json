@@ -1,0 +1,13 @@
+{
+  "builtAt": "2026-07-07T22:19:12.577608+00:00",
+  "fast_qr": "0.13",
+  "outputs": [
+    "package.json",
+    "qrstream_fast_qr_wasm.d.ts",
+    "qrstream_fast_qr_wasm.js",
+    "qrstream_fast_qr_wasm_bg.wasm",
+    "qrstream_fast_qr_wasm_bg.wasm.d.ts"
+  ],
+  "package": "qrstream_fast_qr_wasm",
+  "target": "web"
+}
