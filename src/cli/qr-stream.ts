@@ -17,7 +17,7 @@
 
 import { readFileSync, existsSync, openSync, closeSync } from 'fs';
 import { ReadStream } from 'tty';
-import { COMPATIBLE_QR_ENCODER, encodeQRCodeMatrix } from '../core/qr/qr_encoder';
+import { encodeQRCodeMatrix } from '../core/qr/qr_encoder_node';
 import { packetize } from '../core/sender/packetizer';
 import { scheduleFrames } from '../core/sender/scheduler';
 import { QR_VERSION, ECC_LEVEL } from '../core/protocol/constants';
@@ -232,7 +232,6 @@ async function main() {
       pkt,
       QR_VERSION,
       ECC_LEVEL,
-      COMPATIBLE_QR_ENCODER,
     );
     frames.push(renderToTerminal(matrix));
   }

@@ -30,8 +30,31 @@ export class QrRenderer {
         return ret >>> 0;
     }
     /**
-     * Allocate the renderer and its fixed buffer once.
-     * No further heap allocation occurs inside `render()`.
+     * Side module count from the latest `render_matrix()` call.
+     * @returns {number}
+     */
+    last_matrix_size() {
+        const ret = wasm.qrrenderer_last_matrix_size(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Total capacity of the matrix buffer in bytes.
+     * @returns {number}
+     */
+    matrix_len() {
+        const ret = wasm.qrrenderer_matrix_len(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Raw pointer to the start of the 0/1 module matrix buffer.
+     * @returns {number}
+     */
+    matrix_ptr() {
+        const ret = wasm.qrrenderer_matrix_ptr(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Allocate the renderer and its fixed buffers once.
      */
     constructor() {
         const ret = wasm.qrrenderer_new();
@@ -40,19 +63,9 @@ export class QrRenderer {
         return this;
     }
     /**
-     * Generate a QR code in-place and write RGBA pixels to the fixed buffer.
-     *
-     * # Parameters
-     * - `data`    – raw packet bytes to encode
-     * - `version` – QR version 1-40
-     * - `ecc`     – error correction level (0=L, 1=M, 2=Q, 3=H)
-     * - `scale`   – pixels per module (1-8)
-     *
-     * # Returns
-     * Side pixel count (`sidePx`).  The valid pixel region is
-     * `[buf_ptr .. buf_ptr + sidePx*sidePx*4)`.
-     *
-     * Throws a `JsValue` error string on failure.
+     * Backward-compatible alias for the previous wrapper API.
+     * This is exactly `render_rgba()`: it outputs RGBA pixels into the fixed
+     * RGBA buffer and returns the side pixel count.
      * @param {Uint8Array} data
      * @param {number} version
      * @param {number} ecc
@@ -75,6 +88,88 @@ export class QrRenderer {
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
+    }
+    /**
+     * Generate a QR code in-place and write its raw module matrix to the
+     * fixed matrix buffer.
+     *
+     * Matrix values are one byte per module: 0 = light, 1 = dark.  The matrix
+     * does not include quiet-zone modules.  The valid byte region is
+     * `[matrix_ptr .. matrix_ptr + sideMods*sideMods)`.
+     * @param {Uint8Array} data
+     * @param {number} version
+     * @param {number} ecc
+     * @returns {number}
+     */
+    render_matrix(data, version, ecc) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.qrrenderer_render_matrix(retptr, this.__wbg_ptr, ptr0, len0, version, ecc);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Generate a QR code in-place and write RGBA pixels to the fixed buffer.
+     *
+     * # Parameters
+     * - `data`    – raw packet bytes to encode
+     * - `version` – QR version 1-40
+     * - `ecc`     – error correction level (0=L, 1=M, 2=Q, 3=H)
+     * - `scale`   – pixels per module (1-8)
+     *
+     * # Returns
+     * Side pixel count (`sidePx`).  The valid pixel region is
+     * `[buf_ptr .. buf_ptr + sidePx*sidePx*4)`.
+     *
+     * Throws a `JsValue` error string on failure.
+     * @param {Uint8Array} data
+     * @param {number} version
+     * @param {number} ecc
+     * @param {number} scale
+     * @returns {number}
+     */
+    render_rgba(data, version, ecc, scale) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.qrrenderer_render_rgba(retptr, this.__wbg_ptr, ptr0, len0, version, ecc, scale);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Total capacity of the RGBA buffer in bytes.
+     * @returns {number}
+     */
+    rgba_len() {
+        const ret = wasm.qrrenderer_rgba_len(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Explicit raw pointer to the start of the RGBA buffer.
+     * @returns {number}
+     */
+    rgba_ptr() {
+        const ret = wasm.qrrenderer_rgba_ptr(this.__wbg_ptr);
+        return ret >>> 0;
     }
 }
 if (Symbol.dispose) QrRenderer.prototype[Symbol.dispose] = QrRenderer.prototype.free;

@@ -4,8 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { packetize } from '@/core/sender/packetizer';
 import { scheduleFrames } from '@/core/sender/scheduler';
-import { generateQRMatrix } from '@/core/qr/qr_encode';
-import { rasterizeQR } from '@/core/qr/frame_raster';
+import { renderQRCodeImageData } from '@/core/qr/qr_encoder_browser';
 import { decodeQRFromCanvas } from '@/core/qr/qr_decode';
 import { parsePacket } from '@/core/protocol/packet';
 import { QR_VERSION, ECC_LEVEL } from '@/core/protocol/constants';
@@ -22,9 +21,13 @@ describe('Frame Decode', () => {
     for (let i = 0; i < frames.length; i++) {
       const originalPacket = frames[i]!;
 
-      // Encode as QR
-      const matrix = generateQRMatrix(originalPacket, QR_VERSION, ECC_LEVEL);
-      const imageData = rasterizeQR(matrix, 4);
+      const imageData = await renderQRCodeImageData(
+        originalPacket,
+        QR_VERSION,
+        ECC_LEVEL,
+        4,
+        'fast-qr-wasm',
+      );
 
       // Decode QR
       const decodedQR = await decodeQRFromCanvas(imageData);

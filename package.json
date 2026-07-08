@@ -28,7 +28,7 @@
     "verify:raptorq-wasm": "node scripts/verify-raptorq-wasm.mjs",
     "cli": "bun run src/cli/qr-stream.ts",
     "cli:file": "bun run src/cli/qr-stream.ts",
-    "build:cli": "esbuild src/cli/qr-stream.ts --bundle --platform=node --target=node18 --outfile=dist/qr-stream.js --format=esm --external:node:*",
+    "build:cli": "esbuild src/cli/qr-stream.ts --bundle --platform=node --target=node18 --outfile=dist/qr-stream.js --format=esm --external:node:* && node scripts/copy-cli-wasm-assets.mjs",
     "prepublishOnly": "pnpm run build"
   },
   "keywords": [
@@ -65,7 +65,6 @@
     "fflate": "^0.8.2",
     "gifenc": "^1.0.3",
     "preact": "10.29.4",
-    "qrcode-generator": "1",
     "zxing-wasm": "^3.1.0"
   }
 }

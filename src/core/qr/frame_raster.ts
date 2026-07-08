@@ -29,7 +29,7 @@ function calcPixelSize(moduleCount: number, scale: number): number {
  * A 4-module quiet zone (white) is added on all four sides.
  * Output is pure black (0,0,0,255) and white (255,255,255,255).
  *
- * @param matrix  QR module matrix from `generateQRMatrix`
+ * @param matrix  QR module matrix where `true` is a dark module
  * @param scale   Pixels per module (default 3)
  * @returns       RGBA `ImageData` (non-premultiplied, 4 bytes per pixel)
  */

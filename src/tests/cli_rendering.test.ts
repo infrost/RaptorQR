@@ -190,7 +190,11 @@ describe('CLI Encoder Pipeline', () => {
   it('should produce the same frames as the web app (reuse common logic)', async () => {
     const { packetize } = await import('@/core/sender/packetizer');
     const { scheduleFrames } = await import('@/core/sender/scheduler');
-    const { COMPATIBLE_QR_ENCODER, encodeQRCodeMatrix } = await import('@/core/qr/qr_encoder');
+    const {
+      DEFAULT_CLI_QR_ENCODER,
+      encodeQRCodeMatrix,
+      isFastQrNodeAvailable,
+    } = await import('@/core/qr/qr_encoder_node');
     const { QR_VERSION, ECC_LEVEL } = await import('@/core/protocol/constants');
     const { parseHeader } = await import('@/core/protocol/packet');
 
@@ -199,8 +203,11 @@ describe('CLI Encoder Pipeline', () => {
     const ordered = scheduleFrames(result.packets, result.totalGenerations);
     const genIndices = ordered.map((pkt) => parseHeader(pkt).generationIndex);
 
+    expect(DEFAULT_CLI_QR_ENCODER).toBe('fast-qr-wasm');
+    expect(isFastQrNodeAvailable()).toBe(true);
+
     for (const pkt of ordered) {
-      const matrix = await encodeQRCodeMatrix(pkt, QR_VERSION, ECC_LEVEL, COMPATIBLE_QR_ENCODER);
+      const matrix = await encodeQRCodeMatrix(pkt, QR_VERSION, ECC_LEVEL);
       expect(matrix.length).toBe(57);
       expect(matrix[0]!.length).toBe(57);
     }
@@ -236,7 +243,7 @@ describe('CLI Frame Cycle', () => {
   it('should generate valid QR matrix for every scheduled frame', async () => {
     const { packetize } = await import('@/core/sender/packetizer');
     const { scheduleFrames } = await import('@/core/sender/scheduler');
-    const { COMPATIBLE_QR_ENCODER, encodeQRCodeMatrix } = await import('@/core/qr/qr_encoder');
+    const { encodeQRCodeMatrix } = await import('@/core/qr/qr_encoder_node');
     const { QR_VERSION, ECC_LEVEL } = await import('@/core/protocol/constants');
 
     const data = new TextEncoder().encode('Every frame QR test — medium payload');
@@ -244,7 +251,7 @@ describe('CLI Frame Cycle', () => {
     const ordered = scheduleFrames(result.packets, result.totalGenerations);
 
     for (const pkt of ordered) {
-      const matrix = await encodeQRCodeMatrix(pkt, QR_VERSION, ECC_LEVEL, COMPATIBLE_QR_ENCODER);
+      const matrix = await encodeQRCodeMatrix(pkt, QR_VERSION, ECC_LEVEL);
       expect(matrix.length).toBe(57);
       expect(matrix[0]!.length).toBe(57);
       const hasDark = matrix.some((row) => row.some((cell) => cell));

@@ -1,12 +1,10 @@
 /**
- * QR code generation wrapper.
+ * QR capacity helpers.
  *
- * Uses the `qrcode-generator` library to create QR codes in byte mode
- * with exact version and ECC level.  Throws if the data payload exceeds
- * the capacity of the requested version/ECC combination.
+ * The actual QR symbol writers live in `qr_encoder_browser.ts` and
+ * `qr_encoder_node.ts`; this module only keeps the shared capacity math used
+ * by transfer profiles and packet sizing.
  */
-
-import qrcode from 'qrcode-generator';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,7 +13,7 @@ import qrcode from 'qrcode-generator';
 export type EccLevel = 'L' | 'M' | 'Q' | 'H';
 
 // ---------------------------------------------------------------------------
-// RS block table  (copied from qrcode-generator's internal RS_BLOCK_TABLE)
+// RS block table
 // Layout per version: [L-entry, M-entry, Q-entry, H-entry]
 // Each entry is a flat array of [count, totalCodewords, dataCodewords, …]
 // repeating for each block-group type.
@@ -125,7 +123,7 @@ export function getMaxByteCapacity(version: number, eccLevel: EccLevel): number 
 /**
  * Maximum raw bytes accepted by `zxing-wasm/writer` when the input is a
  * Uint8Array. ZXing emits a binary ECI segment for byte input, which consumes
- * two extra QR codewords versus the legacy qrcode-generator Byte-mode path.
+ * two extra QR codewords versus the plain Byte-mode path used by fast_qr.
  */
 export function getMaxZXingWriterByteCapacity(
   version: number,
@@ -179,59 +177,3 @@ function getTotalDataCodewords(version: number, eccLevel: EccLevel): number {
   return totalDataCodewords;
 }
 
-// ---------------------------------------------------------------------------
-// QR generation
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a QR code symbol in Byte mode for the given raw data.
- *
- * @param data     The raw bytes to encode
- * @param version  QR code version (1 – 40)
- * @param eccLevel Error correction level
- * @returns A 2-D boolean array where `true` = black module, `false` = white
- * @throws `Error` if `data` exceeds the maximum payload for the requested
- *         version and ECC level.
- */
-export function generateQRMatrix(
-  data: Uint8Array,
-  version: number,
-  eccLevel: EccLevel,
-): boolean[][] {
-  if (version < 1 || version > 40) {
-    throw new Error(`Invalid QR version: ${version}. Must be 1-40.`);
-  }
-
-  // Capacity check
-  const maxBytes = getMaxByteCapacity(version, eccLevel);
-  if (data.length > maxBytes) {
-    const minVer = getMinVersion(data.length, eccLevel);
-    throw new Error(
-      `Data too large for V${version}-${eccLevel}. ` +
-      `Maximum ${maxBytes} data bytes in byte mode, got ${data.length}. ` +
-      `Minimum required version: V${minVer}.`,
-    );
-  }
-
-  // Convert Uint8Array → string (lossless for bytes 0-255)
-  // The library's default stringToBytes does s.charCodeAt(i) & 0xff,
-  // which preserves byte values through the string encoding.
-  const dataStr = String.fromCharCode(...data);
-
-  const qr = qrcode(version as any, eccLevel);
-  qr.addData(dataStr, 'Byte');
-  qr.make();
-
-  const moduleCount = qr.getModuleCount();
-  const matrix: boolean[][] = [];
-
-  for (let row = 0; row < moduleCount; row++) {
-    const rowArr: boolean[] = [];
-    for (let col = 0; col < moduleCount; col++) {
-      rowArr.push(qr.isDark(row, col));
-    }
-    matrix.push(rowArr);
-  }
-
-  return matrix;
-}

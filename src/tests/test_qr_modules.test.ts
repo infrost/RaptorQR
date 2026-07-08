@@ -1,8 +1,6 @@
 import {
-  generateQRMatrix,
   getMaxByteCapacity,
   getMaxZXingWriterByteCapacity,
-  getMinVersion,
 } from '../core/qr/qr_encode.ts';
 import { rasterizeQR, rasterizeToGrayscale, getRasterDimensions } from '../core/qr/frame_raster.ts';
 import { decodeQRFromBuffer, decodeQRCodesFromCanvas } from '../core/qr/qr_decode.ts';
@@ -22,6 +20,31 @@ import { renderQRCodeImageDataWithZXing } from '../core/qr/qr_write_wasm.ts';
 import { createQRGif, estimateGifSize } from '../core/gif/gif_render.ts';
 import { describe, it, expect } from 'vitest';
 
+function matrixFromModuleBytes(modules: Uint8Array, sideModules: number): boolean[][] {
+  const matrix: boolean[][] = [];
+
+  for (let row = 0; row < sideModules; row++) {
+    const outRow: boolean[] = [];
+    const rowOffset = row * sideModules;
+
+    for (let col = 0; col < sideModules; col++) {
+      outRow.push(modules[rowOffset + col] === 1);
+    }
+
+    matrix.push(outRow);
+  }
+
+  return matrix;
+}
+
+function makeTestMatrix(size = 21): boolean[][] {
+  return Array.from({ length: size }, (_, row) =>
+    Array.from({ length: size }, (_, col) =>
+      row === col || row === Math.floor(size / 2) || col === Math.floor(size / 2),
+    ),
+  );
+}
+
 describe('QR encode', () => {
   it('should compute capacities for profile versions', () => {
     expect(getMaxByteCapacity(31, 'Q')).toBeGreaterThan(1000);
@@ -36,8 +59,6 @@ describe('QR encode', () => {
     expect(getMaxZXingWriterByteCapacity(20, 'L')).toBe(856);
     expect(getQRTransferProfile('v20-l').maxPacketSize).toBe(858);
     expect(getQRTransferProfile('v20-l').maxPayloadSize).toBe(846);
-    expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPacketSize).toBe(858);
-    expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPayloadSize).toBe(846);
     expect(createQRTransferProfile(20, 'L', 'fast-qr-wasm').maxPacketSize).toBe(858);
     expect(createQRTransferProfile(20, 'L', 'fast-qr-wasm').maxPayloadSize).toBe(846);
     expect(createQRTransferProfile(20, 'L', 'zxing-wasm').maxPacketSize).toBe(856);
@@ -54,18 +75,20 @@ describe('QR encode', () => {
     expect(low.version).toBe(medium.version);
   });
 
-  it('should throw on data too large', () => {
-    expect(() => generateQRMatrix(new Uint8Array(100), 1, 'L')).toThrow();
+  it('should throw on data too large', async () => {
+    await expect(
+      encodeQRCodeMatrix(new Uint8Array(100), 1, 'L', 'fast-qr-wasm'),
+    ).rejects.toThrow();
   });
 
-  it('should generate a matrix', () => {
+  it('should generate a matrix', async () => {
     const data = new Uint8Array([72, 101, 108, 108, 111]); // 'Hello'
-    const matrix = generateQRMatrix(data, 1, 'L');
+    const matrix = await encodeQRCodeMatrix(data, 1, 'L', 'fast-qr-wasm');
     expect(matrix.length).toBe(21);
     expect(matrix[0]!.length).toBe(21);
   });
 
-  it('should expose an encoder abstraction for JS QR, ZXing WASM, and fast_qr WASM', async () => {
+  it('should expose an encoder abstraction for ZXing WASM and fast_qr WASM', async () => {
     const payload = new TextEncoder().encode('encoder facade');
 
     expect(DEFAULT_QR_ENCODER).toBe('fast-qr-wasm');
@@ -87,14 +110,38 @@ describe('QR encode', () => {
     expect(isFastQrAvailable()).toBe(true);
 
     const renderer = new QrRenderer();
-    const sidePx = renderer.render(new TextEncoder().encode('fast qr buffer'), 10, 0, 2);
+    const payload = new TextEncoder().encode('fast qr buffer');
+    const sidePx = renderer.render_rgba(payload, 10, 0, 2);
     const byteLength = sidePx * sidePx * 4;
     const memory = getFastQrWasmMemory();
-    const view = new Uint8ClampedArray(memory.buffer, renderer.buf_ptr(), byteLength);
+    const view = new Uint8ClampedArray(memory.buffer, renderer.rgba_ptr(), byteLength);
 
     expect(sidePx).toBe((10 * 4 + 17 + 8) * 2);
-    expect(renderer.buf_len()).toBeGreaterThanOrEqual(byteLength);
+    expect(renderer.rgba_len()).toBeGreaterThanOrEqual(byteLength);
+    expect(renderer.buf_ptr()).toBe(renderer.rgba_ptr());
+    expect(renderer.buf_len()).toBe(renderer.rgba_len());
+    expect(renderer.render(payload, 10, 0, 2)).toBe(sidePx);
     expect(view.byteLength).toBe(byteLength);
+  });
+
+  it('should expose fast_qr WASM matrix output through the browser encoder facade', async () => {
+    await ensureFastQrWasm();
+
+    const payload = new TextEncoder().encode('fast qr matrix');
+    const renderer = new QrRenderer();
+    const sideModules = renderer.render_matrix(payload, 10, 0);
+    const byteLength = sideModules * sideModules;
+    const memory = getFastQrWasmMemory();
+    const modules = new Uint8Array(memory.buffer, renderer.matrix_ptr(), byteLength);
+    const expectedMatrix = matrixFromModuleBytes(modules.slice(), sideModules);
+    const matrix = await encodeQRCodeMatrix(payload, 10, 'L', 'fast-qr-wasm');
+
+    expect(sideModules).toBe(10 * 4 + 17);
+    expect(renderer.last_matrix_size()).toBe(sideModules);
+    expect(renderer.matrix_len()).toBeGreaterThanOrEqual(byteLength);
+    expect(modules.some((value) => value === 1)).toBe(true);
+    expect(modules.every((value) => value === 0 || value === 1)).toBe(true);
+    expect(matrix).toEqual(expectedMatrix);
   });
 
   it('should round-trip binary payloads through fast_qr WASM', async () => {
@@ -133,14 +180,14 @@ describe('QR encode', () => {
 
 describe('Frame raster', () => {
   it('should produce correct dimensions', () => {
-    const matrix = generateQRMatrix(new Uint8Array([1,2,3]), 1, 'L');
+    const matrix = makeTestMatrix();
     const dims = getRasterDimensions(matrix.length, 3);
     expect(dims.width).toBe((21 + 8) * 3); // 87
     expect(dims.height).toBe(87);
   });
 
   it('should have quiet zone white', () => {
-    const matrix = generateQRMatrix(new Uint8Array([1,2,3]), 1, 'L');
+    const matrix = makeTestMatrix();
     const rgba = rasterizeQR(matrix, 3);
     expect(rgba.data[0]).toBe(255); // corner pixel should be white
     expect(rgba.data[1]).toBe(255);
@@ -150,7 +197,7 @@ describe('Frame raster', () => {
   it('should round-trip through decode', async () => {
     const original = 'Hello QR';
     const data = new TextEncoder().encode(original);
-    const matrix = generateQRMatrix(data, 1, 'L');
+    const matrix = await encodeQRCodeMatrix(data, 1, 'L', 'fast-qr-wasm');
     const gray = rasterizeToGrayscale(matrix, 3);
     const decoded = await decodeQRFromBuffer(gray.data, gray.width, gray.height);
     expect(decoded).not.toBeNull();
@@ -160,10 +207,11 @@ describe('Frame raster', () => {
 
   it('should decode multiple QR codes from one image', async () => {
     const payloads = ['left QR', 'right QR'];
-    const images = payloads.map((text) => {
-      const matrix = generateQRMatrix(new TextEncoder().encode(text), 1, 'L');
-      return rasterizeQR(matrix, 4);
-    });
+    const images = await Promise.all(
+      payloads.map((text) =>
+        renderQRCodeImageData(new TextEncoder().encode(text), 1, 'L', 4, 'fast-qr-wasm'),
+      ),
+    );
     const tileWidth = images[0]!.width;
     const tileHeight = images[0]!.height;
     const width = tileWidth * images.length;
@@ -222,7 +270,7 @@ describe('Frame raster', () => {
 
 describe('GIF render', () => {
   it('should produce valid GIF', () => {
-    const matrix = generateQRMatrix(new Uint8Array([1,2,3]), 1, 'L');
+    const matrix = makeTestMatrix();
     const rgba = rasterizeQR(matrix, 3);
     const gif = createQRGif([rgba.data], 100, rgba.width, rgba.height);
     expect(gif[0]).toBe(0x47); // G

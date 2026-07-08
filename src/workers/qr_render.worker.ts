@@ -14,14 +14,13 @@ import {
   isFastQrAvailable,
   getFastQrWasmMemory,
   QrRenderer,
+  fastQrUnavailableMessage,
 } from '@/core/qr/fast_qr_wasm';
 import {
   normalizeQREncoder,
   renderQRCodeImageData,
   type QREncoder,
 } from '@/core/qr/qr_encoder_browser';
-import { generateQRMatrix } from '@/core/qr/qr_encode';
-import { rasterizeQR } from '@/core/qr/frame_raster';
 import type { EccLevel } from '@/core/qr/qr_encode';
 
 export interface RenderRequest {
@@ -57,12 +56,14 @@ const ECC_TO_NUM: Record<EccLevel, number> = {
 
 let renderer: QrRenderer | null = null;
 
-void ensureFastQrWasm()
+const rendererReady = ensureFastQrWasm()
   .then(() => {
     renderer = new QrRenderer();
+    return renderer;
   })
   .catch(() => {
     renderer = null;
+    return null;
   });
 
 self.onmessage = (e: MessageEvent<RenderRequest>) => {
@@ -82,13 +83,15 @@ async function renderPacket(msg: RenderRequest): Promise<void> {
     let height: number;
 
     if (shouldUseFastQrWasm(qrEncoder)) {
-      if (isFastQrAvailable() && renderer !== null) {
+      const activeRenderer = renderer ?? await rendererReady;
+
+      if (isFastQrAvailable() && activeRenderer !== null) {
         const eccNum = ECC_TO_NUM[msg.ecc];
-        const sidePx = renderer.render(packet, msg.version, eccNum, msg.scale);
+        const sidePx = activeRenderer.render_rgba(packet, msg.version, eccNum, msg.scale);
         const byteLen = sidePx * sidePx * 4;
 
         const memory = getFastQrWasmMemory();
-        const ptr = renderer.buf_ptr();
+        const ptr = activeRenderer.rgba_ptr();
         const view = new Uint8ClampedArray(memory.buffer, ptr, byteLen);
 
         const copy = new Uint8ClampedArray(byteLen);
@@ -98,15 +101,7 @@ async function renderPacket(msg: RenderRequest): Promise<void> {
         width = sidePx;
         height = sidePx;
       } else {
-        const matrix = generateQRMatrix(packet, msg.version, msg.ecc);
-        const imageData = rasterizeQR(matrix, msg.scale);
-
-        buffer = imageData.data.buffer.slice(
-          imageData.data.byteOffset,
-          imageData.data.byteOffset + imageData.data.byteLength,
-        ) as ArrayBuffer;
-        width = imageData.width;
-        height = imageData.height;
+        throw new Error(fastQrUnavailableMessage());
       }
     } else {
       const imageData = await renderQRCodeImageData(

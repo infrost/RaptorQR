@@ -17,9 +17,6 @@ importers:
       preact:
         specifier: 10.29.4
         version: 10.29.4
-      qrcode-generator:
-        specifier: '1'
-        version: 1.5.2
       zxing-wasm:
         specifier: ^3.1.0
         version: 3.1.0(@types/emscripten@1.41.5)
@@ -903,9 +900,6 @@ packages:
 
   preact@10.29.4:
     resolution: {integrity: sha512-GMpwh9+NJ8tSmqwIaVyFRQkiKfBEzQ+k7r7tle4W+kaJ+7wJiB9hFz9BixAomMtenPPSBfM4bZhXozGxhf0uFQ==}
-
-  qrcode-generator@1.5.2:
-    resolution: {integrity: sha512-pItrW0Z9HnDBnFmgiNrY1uxRdri32Uh9EjNYLPVC2zZ3ZRIIEqBoDgm4DkvDwNNDHTK7FNkmr8zAa77BYc9xNw==}
 
   rollup@4.62.2:
     resolution: {integrity: sha512-RFnrW4lhXA3s3eqHDZvN654g8OTjzRfqpIRJYczCGB6HzphckVAi/Qh4tbPUbRuDi7s1Llv8g/NspLkttY3gTA==}
@@ -1829,8 +1823,6 @@ snapshots:
       source-map-js: 1.2.1
 
   preact@10.29.4: {}
-
-  qrcode-generator@1.5.2: {}
 
   rollup@4.62.2:
     dependencies:

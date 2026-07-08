@@ -4,11 +4,10 @@
  * Each Worker that needs a `QrRenderer` should call `ensureFastQrWasm()` once,
  * then instantiate `new QrRenderer()` from this module.  The WASM linear memory
  * is exposed via `getFastQrWasmMemory()` so callers can build a zero-copy
- * `Uint8ClampedArray` view after each `render()` call.
+ * view after each `render_rgba()` or `render_matrix()` call.
  *
- * If the WASM artifacts have not been built yet (stub JS throws on init) every
- * call silently falls back — callers should check `isFastQrAvailable()` and use
- * the JS QR path when it returns false.
+ * If the WASM artifacts have not been built yet (stub JS throws on init),
+ * callers surface a controlled unavailable error.
  *
  * @module
  */
@@ -51,7 +50,7 @@ export async function ensureFastQrWasm(): Promise<void> {
 
 /**
  * Returns true after `ensureFastQrWasm()` has resolved successfully.
- * Use this to decide whether to use the WASM or JS fallback path.
+ * Use this for diagnostics and tests.
  */
 export function isFastQrAvailable(): boolean {
   return wasmOutput !== null;

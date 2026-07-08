@@ -2,15 +2,11 @@
  * Browser QR encoder facade.
  *
  * This file is allowed to import browser-only WASM encoders. Node/CLI code
- * should import `qr_encoder.ts` so esbuild does not pull browser-only wasm
+ * should import `qr_encoder_node.ts` so esbuild does not pull browser-only wasm
  * assets into the terminal bundle.
  */
 
-import {
-  type QREncoder,
-  encodeQRCodeMatrixWithJS,
-  renderQRCodeImageDataWithJS,
-} from './qr_encoder';
+import { type QREncoder } from './qr_encoder';
 import type { EccLevel } from './qr_encode';
 import {
   generateQRMatrixWithZXing,
@@ -21,6 +17,7 @@ import {
   isFastQrAvailable,
   getFastQrWasmMemory,
   QrRenderer,
+  fastQrUnavailableMessage,
 } from './fast_qr_wasm';
 
 export * from './qr_encoder';
@@ -32,7 +29,7 @@ const ECC_TO_NUM: Record<EccLevel, number> = {
   H: 3,
 };
 
-let fastQrRendererPromise: Promise<QrRenderer | null> | null = null;
+let fastQrRendererPromise: Promise<QrRenderer> | null = null;
 
 export async function encodeQRCodeMatrix(
   data: Uint8Array,
@@ -42,12 +39,7 @@ export async function encodeQRCodeMatrix(
 ): Promise<boolean[][]> {
   switch (encoder) {
     case 'fast-qr-wasm':
-      // fast_qr path currently exposes a raster renderer, not a matrix API.
-      // For matrix callers, use the existing JS encoder as a safe fallback.
-      return encodeQRCodeMatrixWithJS(data, version, eccLevel);
-
-    case 'js-qrcode':
-      return encodeQRCodeMatrixWithJS(data, version, eccLevel);
+      return encodeQRCodeMatrixWithFastQr(data, version, eccLevel);
 
     case 'zxing-wasm':
       return generateQRMatrixWithZXing(data, version, eccLevel);
@@ -65,22 +57,27 @@ export async function renderQRCodeImageData(
     case 'fast-qr-wasm':
       return renderQRCodeImageDataWithFastQr(data, version, eccLevel, scale);
 
-    case 'js-qrcode':
-      return renderQRCodeImageDataWithJS(data, version, eccLevel, scale);
-
     case 'zxing-wasm':
       return renderQRCodeImageDataWithZXing(data, version, eccLevel, scale);
   }
 }
 
-async function getFastQrRenderer(): Promise<QrRenderer | null> {
+async function getFastQrRenderer(): Promise<QrRenderer> {
   if (!fastQrRendererPromise) {
     fastQrRendererPromise = ensureFastQrWasm()
       .then(() => new QrRenderer())
-      .catch(() => null);
+      .catch((err: unknown) => {
+        fastQrRendererPromise = null;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`${fastQrUnavailableMessage()} ${message}`);
+      });
   }
 
-  return fastQrRendererPromise;
+  const renderer = await fastQrRendererPromise;
+  if (!renderer || !isFastQrAvailable()) {
+    throw new Error(fastQrUnavailableMessage());
+  }
+  return renderer;
 }
 
 async function renderQRCodeImageDataWithFastQr(
@@ -90,21 +87,50 @@ async function renderQRCodeImageDataWithFastQr(
   scale: number,
 ): Promise<ImageData> {
   const renderer = await getFastQrRenderer();
-
-  if (!renderer || !isFastQrAvailable()) {
-    return renderQRCodeImageDataWithJS(data, version, eccLevel, scale);
-  }
-
   const eccNum = ECC_TO_NUM[eccLevel];
-  const sidePx = renderer.render(data, version, eccNum, scale);
+  const sidePx = renderer.render_rgba(data, version, eccNum, scale);
   const byteLen = sidePx * sidePx * 4;
 
   const memory = getFastQrWasmMemory();
-  const ptr = renderer.buf_ptr();
+  const ptr = renderer.rgba_ptr();
   const view = new Uint8ClampedArray(memory.buffer, ptr, byteLen);
 
   const copy = new Uint8ClampedArray(byteLen);
   copy.set(view);
 
   return new ImageData(copy, sidePx, sidePx);
+}
+
+async function encodeQRCodeMatrixWithFastQr(
+  data: Uint8Array,
+  version: number,
+  eccLevel: EccLevel,
+): Promise<boolean[][]> {
+  const renderer = await getFastQrRenderer();
+  const eccNum = ECC_TO_NUM[eccLevel];
+  const sideModules = renderer.render_matrix(data, version, eccNum);
+  const byteLen = sideModules * sideModules;
+
+  const memory = getFastQrWasmMemory();
+  const ptr = renderer.matrix_ptr();
+  const modules = new Uint8Array(memory.buffer, ptr, byteLen);
+
+  return matrixFromModuleBytes(modules, sideModules);
+}
+
+function matrixFromModuleBytes(modules: Uint8Array, sideModules: number): boolean[][] {
+  const matrix: boolean[][] = [];
+
+  for (let row = 0; row < sideModules; row++) {
+    const outRow: boolean[] = [];
+    const rowOffset = row * sideModules;
+
+    for (let col = 0; col < sideModules; col++) {
+      outRow.push(modules[rowOffset + col] === 1);
+    }
+
+    matrix.push(outRow);
+  }
+
+  return matrix;
 }

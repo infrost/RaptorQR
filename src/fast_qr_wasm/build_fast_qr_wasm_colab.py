@@ -6,10 +6,11 @@ not need a Rust toolchain.  It can be pasted directly into a Colab cell.  If a
 QR Stream repo is present, artifacts are copied into src/fast_qr_wasm/wasm;
 otherwise they are written to /content/qrstream_fast_qr_wasm_artifacts and zipped.
 
-The crate exposes a single `QrRenderer` struct whose internal RGBA buffer is
-allocated exactly once at construction time.  Callers invoke `render()` and then
-read the result directly through a JavaScript `Uint8ClampedArray` view into the
-WASM linear memory — zero heap allocation per frame on the Rust side.
+The crate exposes a single `QrRenderer` struct whose internal RGBA and matrix
+buffers are allocated exactly once at construction time.  Callers invoke
+`render_rgba()` for app/live/GIF rendering or `render_matrix()` for CLI/tests,
+then read the result directly through JavaScript views into WASM linear memory.
+The legacy `render()` method remains as an alias for `render_rgba()`.
 """
 
 from __future__ import annotations
@@ -60,17 +61,26 @@ wasm-opt = false
 # src/lib.rs
 # ---------------------------------------------------------------------------
 # Design:
-#   - `QrRenderer` allocates a single fixed RGBA buffer large enough to hold
-#     a version-40 QR at scale 8 (the largest sensible combination):
+#   - `QrRenderer` allocates two fixed buffers:
+#       1. An RGBA buffer large enough to hold a version-40 QR at scale 8:
 #       (177 modules + 4*2 quiet-zone) * 8 px = 1480 px per side
 #       1480 * 1480 * 4 bytes ≈ 8.76 MB
-#   - `render()` writes RGBA directly into that buffer and returns the side
-#     pixel count so JS knows how many bytes are valid.
-#   - `buf_ptr()` / `buf_len()` expose the raw pointer and total capacity.
+#       2. A 177*177 byte matrix buffer for raw module data.
+#   - `render_rgba()` writes RGBA directly into the RGBA buffer and returns the
+#     side pixel count so JS knows how many bytes are valid.
+#   - `render_matrix()` writes 0/1 bytes directly into the matrix buffer and
+#     returns the side module count.
+#   - `render()` is a backward-compatible alias for `render_rgba()`; it also
+#     outputs RGBA into the same fixed RGBA buffer.
+#   - `buf_ptr()` / `buf_len()` expose the RGBA buffer for compatibility with
+#     the previous wrapper. `rgba_ptr()` / `rgba_len()` and
+#     `matrix_ptr()` / `matrix_len()` are the explicit APIs.
 #   - JS zero-copy path:
-#       const sidePx = renderer.render(data, version, ecc, scale);
-#       const view = new Uint8ClampedArray(wasm.memory.buffer, renderer.buf_ptr(), sidePx*sidePx*4);
+#       const sidePx = renderer.render_rgba(data, version, ecc, scale);
+#       const view = new Uint8ClampedArray(wasm.memory.buffer, renderer.rgba_ptr(), sidePx*sidePx*4);
 #       const imageData = new ImageData(view.slice(), sidePx, sidePx);
+#       const sideMods = renderer.render_matrix(data, version, ecc);
+#       const modules = new Uint8Array(wasm.memory.buffer, renderer.matrix_ptr(), sideMods*sideMods);
 
 WRAPPER_LIB_RS = r"""
 use fast_qr::{ECL, Version, QRBuilder};
@@ -84,6 +94,12 @@ const MAX_SIDE_PX: u32 = (177 + QZ * 2) * 8;
 
 /// Total bytes in the fixed RGBA buffer.
 const MAX_BUF: usize = (MAX_SIDE_PX as usize) * (MAX_SIDE_PX as usize) * 4;
+
+/// Maximum raw module count in a QR matrix (V40 = 177x177).
+const MAX_MATRIX_SIDE: usize = 177;
+
+/// Total bytes in the fixed matrix buffer.  Each module is 0=light, 1=dark.
+const MAX_MATRIX_BUF: usize = MAX_MATRIX_SIDE * MAX_MATRIX_SIDE;
 
 // ---------------------------------------------------------------------------
 // ECC helpers
@@ -131,18 +147,25 @@ fn version_from_u8(v: u8) -> Result<Version, JsValue> {
 #[wasm_bindgen]
 pub struct QrRenderer {
     /// Fixed-capacity RGBA buffer — one lifetime allocation.
-    buf: Vec<u8>,
+    rgba_buf: Vec<u8>,
+
+    /// Fixed-capacity raw QR module buffer.  Values are 0=light, 1=dark.
+    matrix_buf: Vec<u8>,
+
+    /// Side module count written by the latest `render_matrix()` call.
+    matrix_size: u32,
 }
 
 #[wasm_bindgen]
 impl QrRenderer {
-    /// Allocate the renderer and its fixed buffer once.
-    /// No further heap allocation occurs inside `render()`.
+    /// Allocate the renderer and its fixed buffers once.
     #[wasm_bindgen(constructor)]
     pub fn new() -> QrRenderer {
         // Pre-fill with white (255) so any untouched pixels are white.
         QrRenderer {
-            buf: vec![0xffu8; MAX_BUF],
+            rgba_buf: vec![0xffu8; MAX_BUF],
+            matrix_buf: vec![0u8; MAX_MATRIX_BUF],
+            matrix_size: 0,
         }
     }
 
@@ -159,7 +182,13 @@ impl QrRenderer {
     /// `[buf_ptr .. buf_ptr + sidePx*sidePx*4)`.
     ///
     /// Throws a `JsValue` error string on failure.
-    pub fn render(&mut self, data: &[u8], version: u8, ecc: u8, scale: u8) -> Result<u32, JsValue> {
+    pub fn render_rgba(
+        &mut self,
+        data: &[u8],
+        version: u8,
+        ecc: u8,
+        scale: u8,
+    ) -> Result<u32, JsValue> {
         if scale == 0 || scale > 8 {
             return Err(JsValue::from_str(&format!("Scale must be 1-8, got {scale}")));
         }
@@ -179,7 +208,7 @@ impl QrRenderer {
         let side_px = side_mods * scale_u;
 
         let required = (side_px as usize) * (side_px as usize) * 4;
-        if required > self.buf.len() {
+        if required > self.rgba_buf.len() {
             return Err(JsValue::from_str(&format!(
                 "Buffer too small: need {required} bytes for V{version} scale {scale}"
             )));
@@ -202,26 +231,91 @@ impl QrRenderer {
 
                 let v = if is_dark { 0u8 } else { 0xffu8 };
                 let idx = ((py * side_px + px) * 4) as usize;
-                self.buf[idx]     = v;   // R
-                self.buf[idx + 1] = v;   // G
-                self.buf[idx + 2] = v;   // B
-                self.buf[idx + 3] = 0xff; // A
+                self.rgba_buf[idx]     = v;   // R
+                self.rgba_buf[idx + 1] = v;   // G
+                self.rgba_buf[idx + 2] = v;   // B
+                self.rgba_buf[idx + 3] = 0xff; // A
             }
         }
 
         Ok(side_px)
     }
 
+    /// Backward-compatible alias for the previous wrapper API.
+    /// This is exactly `render_rgba()`: it outputs RGBA pixels into the fixed
+    /// RGBA buffer and returns the side pixel count.
+    pub fn render(&mut self, data: &[u8], version: u8, ecc: u8, scale: u8) -> Result<u32, JsValue> {
+        self.render_rgba(data, version, ecc, scale)
+    }
+
+    /// Generate a QR code in-place and write its raw module matrix to the
+    /// fixed matrix buffer.
+    ///
+    /// Matrix values are one byte per module: 0 = light, 1 = dark.  The matrix
+    /// does not include quiet-zone modules.  The valid byte region is
+    /// `[matrix_ptr .. matrix_ptr + sideMods*sideMods)`.
+    pub fn render_matrix(&mut self, data: &[u8], version: u8, ecc: u8) -> Result<u32, JsValue> {
+        let ecl = ecc_from_u8(ecc)?;
+        let ver = version_from_u8(version)?;
+
+        let qr = QRBuilder::new(data)
+            .version(ver)
+            .ecl(ecl)
+            .build()
+            .map_err(|e| JsValue::from_str(&format!("fast_qr build error: {e:?}")))?;
+
+        let size = qr.size;
+        let required = size * size;
+
+        if required > self.matrix_buf.len() {
+            return Err(JsValue::from_str(&format!(
+                "Matrix buffer too small: need {required} bytes for V{version}"
+            )));
+        }
+
+        for idx in 0..required {
+            self.matrix_buf[idx] = if qr.data[idx].value() { 1 } else { 0 };
+        }
+
+        self.matrix_size = size as u32;
+        Ok(self.matrix_size)
+    }
+
     /// Raw pointer to the start of the RGBA buffer inside WASM linear memory.
     /// Valid for the lifetime of this `QrRenderer` instance.
     pub fn buf_ptr(&self) -> u32 {
-        self.buf.as_ptr() as u32
+        self.rgba_ptr()
     }
 
     /// Total capacity of the buffer in bytes (not the valid region — use
     /// `sidePx * sidePx * 4` after `render()` to get the valid byte count).
     pub fn buf_len(&self) -> u32 {
-        self.buf.len() as u32
+        self.rgba_len()
+    }
+
+    /// Explicit raw pointer to the start of the RGBA buffer.
+    pub fn rgba_ptr(&self) -> u32 {
+        self.rgba_buf.as_ptr() as u32
+    }
+
+    /// Total capacity of the RGBA buffer in bytes.
+    pub fn rgba_len(&self) -> u32 {
+        self.rgba_buf.len() as u32
+    }
+
+    /// Raw pointer to the start of the 0/1 module matrix buffer.
+    pub fn matrix_ptr(&self) -> u32 {
+        self.matrix_buf.as_ptr() as u32
+    }
+
+    /// Total capacity of the matrix buffer in bytes.
+    pub fn matrix_len(&self) -> u32 {
+        self.matrix_buf.len() as u32
+    }
+
+    /// Side module count from the latest `render_matrix()` call.
+    pub fn last_matrix_size(&self) -> u32 {
+        self.matrix_size
     }
 }
 """

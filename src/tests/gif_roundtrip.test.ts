@@ -4,8 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { packetize } from '@/core/sender/packetizer';
 import { scheduleFrames } from '@/core/sender/scheduler';
-import { generateQRMatrix } from '@/core/qr/qr_encode';
-import { rasterizeQR } from '@/core/qr/frame_raster';
+import { renderQRCodeImageData } from '@/core/qr/qr_encoder_browser';
 import { createQRGif } from '@/core/gif/gif_render';
 import { parseGif, renderGifFrame } from '@/core/gif/gif_parser';
 import { decodeQRFromCanvas } from '@/core/qr/qr_decode';
@@ -20,13 +19,12 @@ describe('GIF Roundtrip', () => {
     const result = packetize(data, false, false);
     const frames = scheduleFrames(result.packets, result.totalGenerations);
 
-    // Generate QR matrices and rasterize
+    // Generate QR image frames
     const imageFrames: Uint8Array[] = [];
     let width = 0;
     let height = 0;
     for (const frame of frames) {
-      const matrix = generateQRMatrix(frame, QR_VERSION, ECC_LEVEL);
-      const imageData = rasterizeQR(matrix, 4);
+      const imageData = await renderQRCodeImageData(frame, QR_VERSION, ECC_LEVEL, 4, 'fast-qr-wasm');
       if (width === 0) {
         width = imageData.width;
         height = imageData.height;
