@@ -57,6 +57,13 @@ const raptorqWasmPath = join(
   'wasm',
   'qrstream_raptorq_wasm_bg.wasm',
 );
+const fastQrWasmPath = join(
+  process.cwd(),
+  'src',
+  'fast_qr_wasm',
+  'wasm',
+  'qrstream_fast_qr_wasm_bg.wasm',
+);
 
 // happy-dom's Response is not accepted by Node's instantiateStreaming; tests can
 // use the same local wasm bytes through the ArrayBuffer fallback.
@@ -90,6 +97,15 @@ globalThis.fetch = async (input, init) => {
 
   if (url.includes('qrstream_raptorq_wasm_bg.wasm')) {
     const bytes = await readFile(raptorqWasmPath);
+    const body = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return new Response(body, {
+      headers: { 'Content-Type': 'application/wasm' },
+      status: 200,
+    });
+  }
+
+  if (url.includes('qrstream_fast_qr_wasm_bg.wasm')) {
+    const bytes = await readFile(fastQrWasmPath);
     const body = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     return new Response(body, {
       headers: { 'Content-Type': 'application/wasm' },

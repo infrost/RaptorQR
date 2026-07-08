@@ -7,10 +7,17 @@ import {
 import { rasterizeQR, rasterizeToGrayscale, getRasterDimensions } from '../core/qr/frame_raster.ts';
 import { decodeQRFromBuffer, decodeQRCodesFromCanvas } from '../core/qr/qr_decode.ts';
 import {
+  DEFAULT_QR_ENCODER,
   QR_ENCODERS,
   encodeQRCodeMatrix,
   renderQRCodeImageData,
 } from '../core/qr/qr_encoder_browser.ts';
+import {
+  QrRenderer,
+  ensureFastQrWasm,
+  getFastQrWasmMemory,
+  isFastQrAvailable,
+} from '../core/qr/fast_qr_wasm.ts';
 import { renderQRCodeImageDataWithZXing } from '../core/qr/qr_write_wasm.ts';
 import { createQRGif, estimateGifSize } from '../core/gif/gif_render.ts';
 import { describe, it, expect } from 'vitest';
@@ -54,8 +61,10 @@ describe('QR encode', () => {
     expect(matrix[0]!.length).toBe(21);
   });
 
-  it('should expose an encoder abstraction for JS QR and ZXing WASM', async () => {
+  it('should expose an encoder abstraction for JS QR, ZXing WASM, and fast_qr WASM', async () => {
     const payload = new TextEncoder().encode('encoder facade');
+
+    expect(DEFAULT_QR_ENCODER).toBe('fast-qr-wasm');
 
     for (const encoder of QR_ENCODERS) {
       const matrix = await encodeQRCodeMatrix(payload, 10, 'L', encoder);
@@ -67,6 +76,54 @@ describe('QR encode', () => {
       expect(decoded).toHaveLength(1);
       expect(new TextDecoder().decode(decoded[0]!.bytes)).toBe('encoder facade');
     }
+  });
+
+  it('should initialize fast_qr WASM and expose its fixed render buffer', async () => {
+    await ensureFastQrWasm();
+    expect(isFastQrAvailable()).toBe(true);
+
+    const renderer = new QrRenderer();
+    const sidePx = renderer.render(new TextEncoder().encode('fast qr buffer'), 10, 0, 2);
+    const byteLength = sidePx * sidePx * 4;
+    const memory = getFastQrWasmMemory();
+    const view = new Uint8ClampedArray(memory.buffer, renderer.buf_ptr(), byteLength);
+
+    expect(sidePx).toBe((10 * 4 + 17 + 8) * 2);
+    expect(renderer.buf_len()).toBeGreaterThanOrEqual(byteLength);
+    expect(view.byteLength).toBe(byteLength);
+  });
+
+  it('should round-trip binary payloads through fast_qr WASM', async () => {
+    const payload = new Uint8Array([0, 1, 2, 3, 4, 5, 31, 127, 128, 200, 255]);
+    const image = await renderQRCodeImageData(payload, 10, 'L', 4, 'fast-qr-wasm');
+    const decoded = await decodeQRCodesFromCanvas(image, 1);
+
+    expect(image.width).toBe((10 * 4 + 17 + 8) * 4);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.version).toBe(10);
+    expect(decoded[0]!.bytes).toEqual(payload);
+  });
+
+  it('should write and read a full V40-L transfer packet with fast_qr WASM', async () => {
+    const { createQRTransferProfile } = await import('@/core/protocol/profiles');
+
+    const profile = createQRTransferProfile(40, 'L', 'fast-qr-wasm');
+    const packet = new Uint8Array(profile.maxPacketSize);
+    for (let i = 0; i < packet.length; i++) packet[i] = i & 0xff;
+
+    const image = await renderQRCodeImageData(
+      packet,
+      profile.version,
+      profile.eccLevel,
+      2,
+      'fast-qr-wasm',
+    );
+    const decoded = await decodeQRCodesFromCanvas(image, 1);
+
+    expect(image.width).toBe((40 * 4 + 17 + 8) * 2);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.version).toBe(40);
+    expect(decoded[0]!.bytes).toEqual(packet);
   });
 });
 
