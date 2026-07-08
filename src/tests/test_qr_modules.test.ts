@@ -29,15 +29,19 @@ describe('QR encode', () => {
     expect(getMaxByteCapacity(40, 'M')).toBeGreaterThan(2000);
   });
 
-  it('should account for ZXing writer binary ECI overhead in transfer profiles', async () => {
+  it('should only apply ZXing writer binary ECI overhead to ZXing transfer profiles', async () => {
     const { createQRTransferProfile, getQRTransferProfile } = await import('@/core/protocol/profiles');
 
     expect(getMaxByteCapacity(20, 'L')).toBe(858);
     expect(getMaxZXingWriterByteCapacity(20, 'L')).toBe(856);
-    expect(getQRTransferProfile('v20-l').maxPacketSize).toBe(856);
-    expect(getQRTransferProfile('v20-l').maxPayloadSize).toBe(844);
+    expect(getQRTransferProfile('v20-l').maxPacketSize).toBe(858);
+    expect(getQRTransferProfile('v20-l').maxPayloadSize).toBe(846);
     expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPacketSize).toBe(858);
     expect(createQRTransferProfile(20, 'L', 'js-qrcode').maxPayloadSize).toBe(846);
+    expect(createQRTransferProfile(20, 'L', 'fast-qr-wasm').maxPacketSize).toBe(858);
+    expect(createQRTransferProfile(20, 'L', 'fast-qr-wasm').maxPayloadSize).toBe(846);
+    expect(createQRTransferProfile(20, 'L', 'zxing-wasm').maxPacketSize).toBe(856);
+    expect(createQRTransferProfile(20, 'L', 'zxing-wasm').maxPayloadSize).toBe(844);
   });
 
   it('should expose low-ECC transfer profiles with more payload room', async () => {
@@ -196,9 +200,9 @@ describe('Frame raster', () => {
   });
 
   it('should write and read a full V20-L transfer packet with ZXing WASM', async () => {
-    const { getQRTransferProfile } = await import('@/core/protocol/profiles');
+    const { createQRTransferProfile } = await import('@/core/protocol/profiles');
 
-    const profile = getQRTransferProfile('v20-l');
+    const profile = createQRTransferProfile(20, 'L', 'zxing-wasm');
     const packet = new Uint8Array(profile.maxPacketSize);
     for (let i = 0; i < packet.length; i++) packet[i] = i & 0xff;
 
@@ -257,5 +261,43 @@ describe('Parallel striping', () => {
     expect(frameCount).toBe(3);
     expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(emptyTiles).toBe(2);
+  });
+
+  it('should support 8-way striping without duplicating packets', async () => {
+    const { stripedFrameCount, stripedPacketIndex } = await import('@/core/sender/parallel_striping');
+
+    const packetCount = 17;
+    const parallelCount = 8;
+    const frameCount = stripedFrameCount(packetCount, parallelCount);
+    const seen: number[] = [];
+    let emptyTiles = 0;
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      for (let tileIndex = 0; tileIndex < parallelCount; tileIndex++) {
+        const packetIndex = stripedPacketIndex(packetCount, parallelCount, frameIndex, tileIndex);
+        if (packetIndex === null) {
+          emptyTiles++;
+        } else {
+          seen.push(packetIndex);
+        }
+      }
+    }
+
+    expect(frameCount).toBe(3);
+    expect(seen).toEqual(Array.from({ length: packetCount }, (_, index) => index));
+    expect(emptyTiles).toBe(7);
+  });
+});
+
+describe('Transfer defaults', () => {
+  it('should default RaptorQ repair to 10 percent and expose manual 6/8 decode symbols', async () => {
+    const { DEFAULT_RAPTORQ_REPAIR_PERCENT, normalizeFecCodec } = await import('@/core/fec/codec');
+    const { MAX_SYMBOL_OPTIONS, normalizeDecodeSettings } = await import('@/core/qr/decode_settings');
+
+    expect(DEFAULT_RAPTORQ_REPAIR_PERCENT).toBe(10);
+    expect(normalizeFecCodec('js-rlnc')).toBe('js-rlnc');
+    expect(normalizeFecCodec('wasm-raptorq')).toBe('wasm-raptorq');
+    expect(MAX_SYMBOL_OPTIONS).toEqual(['auto', 1, 2, 4, 6, 8]);
+    expect(normalizeDecodeSettings({ maxSymbols: 8 }).maxSymbols).toBe(8);
   });
 });

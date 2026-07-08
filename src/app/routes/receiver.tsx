@@ -1133,11 +1133,13 @@ function formatDecodePreset(value: DecodePresetId): string {
 function parseMaxSymbolsMode(value: string): MaxSymbolsMode {
   if (value === 'auto') return 'auto';
   const parsed = Number(value);
-  return parsed === 1 || parsed === 2 || parsed === 4 ? parsed : DEFAULT_DECODE_SETTINGS.maxSymbols;
+  return parsed === 1 || parsed === 2 || parsed === 4 || parsed === 6 || parsed === 8
+    ? parsed
+    : DEFAULT_DECODE_SETTINGS.maxSymbols;
 }
 
 function formatMaxSymbols(value: MaxSymbolsMode): string {
-  return value === 'auto' ? 'Auto' : String(value);
+  return value === 'auto' ? 'Auto (4)' : String(value);
 }
 
 function normalizeBinarizer(value: string): QrBinarizer {

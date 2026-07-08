@@ -3,12 +3,15 @@ export type ReceiverFecCodec = 'auto' | FecCodec;
 
 export const DEFAULT_FEC_CODEC: FecCodec = 'wasm-raptorq';
 export const DEFAULT_RECEIVER_FEC_CODEC: ReceiverFecCodec = 'auto';
-export const DEFAULT_RAPTORQ_REPAIR_PERCENT = 20;
+export const DEFAULT_RAPTORQ_REPAIR_PERCENT = 10;
 export const MIN_RAPTORQ_REPAIR_PERCENT = 0;
 export const MAX_RAPTORQ_REPAIR_PERCENT = 100;
 
 export function normalizeFecCodec(value: unknown): FecCodec {
-  return value === 'wasm-raptorq' ? 'wasm-raptorq' : DEFAULT_FEC_CODEC;
+  if (value === 'js-rlnc' || value === 'wasm-raptorq') {
+    return value;
+  }
+  return DEFAULT_FEC_CODEC;
 }
 
 export function normalizeReceiverFecCodec(value: unknown): ReceiverFecCodec {

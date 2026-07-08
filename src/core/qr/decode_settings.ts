@@ -1,7 +1,7 @@
 import type { Binarizer } from 'zxing-wasm/reader';
 
 export type DecodePresetId = 'fast' | 'balance' | 'robust' | 'custom';
-export type MaxSymbolsMode = 'auto' | 1 | 2 | 4;
+export type MaxSymbolsMode = 'auto' | 1 | 2 | 4 | 6 | 8;
 export type DownscaleFactor = 2 | 3 | 4;
 export type QrBinarizer = Binarizer;
 
@@ -48,7 +48,7 @@ export const BINARIZER_OPTIONS: QrBinarizer[] = [
   'BoolCast',
 ];
 
-export const MAX_SYMBOL_OPTIONS: MaxSymbolsMode[] = ['auto', 1, 2, 4];
+export const MAX_SYMBOL_OPTIONS: MaxSymbolsMode[] = ['auto', 1, 2, 4, 6, 8];
 export const DOWNSCALE_FACTOR_OPTIONS: DownscaleFactor[] = [2, 3, 4];
 
 export const DEFAULT_DECODE_PRESET: DecodePresetId = 'balance';

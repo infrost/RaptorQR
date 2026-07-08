@@ -136,13 +136,15 @@ function normalizeEccLevel(value: EccLevel | undefined): EccLevel {
 }
 
 function normalizeParallelQRCount(value: number | undefined): ParallelQRCount {
-  return value === 2 || value === 4 ? value : 1;
+  return value === 1 || value === 2 || value === 4 || value === 6 || value === 8 ? value : 4;
 }
 
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {
   if (parallelCount === 1) return { columns: 1, rows: 1 };
   if (parallelCount === 2) return { columns: 2, rows: 1 };
-  return { columns: 2, rows: 2 };
+  if (parallelCount === 4) return { columns: 2, rows: 2 };
+  if (parallelCount === 6) return { columns: 3, rows: 2 };
+  return { columns: 4, rows: 2 };
 }
 
 function blitImageData(

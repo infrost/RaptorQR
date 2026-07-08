@@ -85,8 +85,8 @@ type CSSProps = Record<string, string | number>;
 const MIN_FRAME_RATE_FPS = 2;
 const MAX_FRAME_RATE_FPS = 60;
 const DEFAULT_FRAME_RATE_FPS = 30;
-const DEFAULT_PARALLEL_QR_COUNT: ParallelQRCount = 1;
-const PARALLEL_QR_COUNTS: ParallelQRCount[] = [1, 2, 4];
+const DEFAULT_PARALLEL_QR_COUNT: ParallelQRCount = 4;
+const PARALLEL_QR_COUNTS: ParallelQRCount[] = [1, 2, 4, 6, 8];
 const FEC_CODEC_OPTIONS: FecCodec[] = ['wasm-raptorq', 'js-rlnc'];
 const LIVE_TARGET_PX = 360;
 const QR_QUIET_ZONE_MODULES = 4;
@@ -258,6 +258,7 @@ export function SenderPage() {
   const [qrEncoder, setQrEncoder] = useState<QREncoder>(DEFAULT_QR_ENCODER);
   const [fecCodec, setFecCodec] = useState<FecCodec>(DEFAULT_FEC_CODEC);
   const [raptorqRepairPercent, setRaptorqRepairPercent] = useState(DEFAULT_RAPTORQ_REPAIR_PERCENT);
+  const [advancedGenerateOpen, setAdvancedGenerateOpen] = useState(false);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
   const [actualLiveFps, setActualLiveFps] = useState(0);
   const [renderReadyPackets, setRenderReadyPackets] = useState(0);
@@ -1023,63 +1024,76 @@ export function SenderPage() {
           </select>
         </div>
         <div style={{ marginBottom: 16 }}>
-          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={S.label}>QR encoder</span>
-            <span style={S.infoValue}>{formatQREncoder(qrEncoder)}</span>
-          </div>
-          <select
-            value={qrEncoder}
-            style={S.select}
-            disabled={encodingLive}
-            onChange={(e) => handleQREncoderChange((e.target as HTMLSelectElement).value)}
+          <button
+            type="button"
+            style={S.btnSecondary}
+            onClick={() => setAdvancedGenerateOpen((open) => !open)}
           >
-            {QR_ENCODERS.map((encoder) => (
-              <option key={encoder} value={encoder}>
-                {formatQREncoder(encoder)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={S.label}>FEC codec</span>
-            <span style={S.infoValue}>{formatFecCodec(fecCodec)}</span>
-          </div>
-          <select
-            value={fecCodec}
-            style={S.select}
-            disabled={encodingLive}
-            onChange={(e) => handleFecCodecChange((e.target as HTMLSelectElement).value)}
-          >
-            {FEC_CODEC_OPTIONS.map((codec) => (
-              <option key={codec} value={codec}>
-                {formatFecCodec(codec)}
-              </option>
-            ))}
-          </select>
-        </div>
-        {fecCodec === 'wasm-raptorq' && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={S.label}>RaptorQ repair</span>
-              <span style={S.infoValue}>{raptorqRepairPercent}%</span>
+            {advancedGenerateOpen ? 'Hide advanced settings' : 'Advanced settings'}
+          </button>
+          {advancedGenerateOpen && (
+            <div style={{ marginTop: 14, display: 'grid', gap: 16 }}>
+              <label>
+                <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={S.label}>QR encoder</span>
+                  <span style={S.infoValue}>{formatQREncoder(qrEncoder)}</span>
+                </div>
+                <select
+                  value={qrEncoder}
+                  style={S.select}
+                  disabled={encodingLive}
+                  onChange={(e) => handleQREncoderChange((e.target as HTMLSelectElement).value)}
+                >
+                  {QR_ENCODERS.map((encoder) => (
+                    <option key={encoder} value={encoder}>
+                      {formatQREncoder(encoder)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={S.label}>FEC codec</span>
+                  <span style={S.infoValue}>{formatFecCodec(fecCodec)}</span>
+                </div>
+                <select
+                  value={fecCodec}
+                  style={S.select}
+                  disabled={encodingLive}
+                  onChange={(e) => handleFecCodecChange((e.target as HTMLSelectElement).value)}
+                >
+                  {FEC_CODEC_OPTIONS.map((codec) => (
+                    <option key={codec} value={codec}>
+                      {formatFecCodec(codec)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {fecCodec === 'wasm-raptorq' && (
+                <label>
+                  <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={S.label}>RaptorQ repair</span>
+                    <span style={S.infoValue}>{raptorqRepairPercent}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={MIN_RAPTORQ_REPAIR_PERCENT}
+                    max={MAX_RAPTORQ_REPAIR_PERCENT}
+                    step={1}
+                    value={raptorqRepairPercent}
+                    style={S.slider}
+                    disabled={encodingLive}
+                    onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
+                  />
+                  <div style={S.sliderLabels}>
+                    <span>Less QR</span>
+                    <span>More repair</span>
+                  </div>
+                </label>
+              )}
             </div>
-            <input
-              type="range"
-              min={MIN_RAPTORQ_REPAIR_PERCENT}
-              max={MAX_RAPTORQ_REPAIR_PERCENT}
-              step={1}
-              value={raptorqRepairPercent}
-              style={S.slider}
-              disabled={encodingLive}
-              onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
-            />
-            <div style={S.sliderLabels}>
-              <span>Less QR</span>
-              <span>More repair</span>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
         <div style={{ marginBottom: 16 }}>
           <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={S.label}>QR speed</span>
@@ -1116,6 +1130,12 @@ export function SenderPage() {
               </option>
             ))}
           </select>
+          {parallelQRCount > 4 && (
+            <div style={S.warn}>
+              Receiver Auto (4) scans up to 4 QR codes per frame. For {parallelQRCount} parallel QR,
+              set Receiver advanced settings - Max symbols to {parallelQRCount}.
+            </div>
+          )}
         </div>
         <div style={S.row}>
           <button
@@ -1502,7 +1522,9 @@ function normalizeFrameIndex(frameIndex: number, frameCount: number): number {
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {
   if (parallelCount === 1) return { columns: 1, rows: 1 };
   if (parallelCount === 2) return { columns: 2, rows: 1 };
-  return { columns: 2, rows: 2 };
+  if (parallelCount === 4) return { columns: 2, rows: 2 };
+  if (parallelCount === 6) return { columns: 3, rows: 2 };
+  return { columns: 4, rows: 2 };
 }
 
 function getPacketIndexForDisplayFrame(

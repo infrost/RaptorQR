@@ -12,7 +12,7 @@ import {
   getMaxZXingWriterByteCapacity,
   type EccLevel,
 } from '@/core/qr/qr_encode';
-import type { QREncoder } from '@/core/qr/qr_encoder';
+import { DEFAULT_QR_ENCODER, type QREncoder } from '@/core/qr/qr_encoder';
 
 export interface QRTransferProfile {
   id: string;
@@ -49,13 +49,13 @@ export const QR_TRANSFER_PROFILES: QRTransferProfile[] = PROFILE_SPECS.map((spec
 export function createQRTransferProfile(
   version: number,
   eccLevel: EccLevel,
-  qrEncoder: QREncoder = 'zxing-wasm',
+  qrEncoder: QREncoder = DEFAULT_QR_ENCODER,
 ): QRTransferProfile {
   const normalizedVersion = normalizeQRVersion(version);
   const normalizedEccLevel = normalizeEccLevel(eccLevel);
-  const maxPacketSize = qrEncoder === 'js-qrcode'
-    ? getMaxByteCapacity(normalizedVersion, normalizedEccLevel)
-    : getMaxZXingWriterByteCapacity(normalizedVersion, normalizedEccLevel);
+  const maxPacketSize = qrEncoder === 'zxing-wasm'
+    ? getMaxZXingWriterByteCapacity(normalizedVersion, normalizedEccLevel)
+    : getMaxByteCapacity(normalizedVersion, normalizedEccLevel);
   const maxPayloadSize = maxPacketSize - HEADER_SIZE - CRC32C_SIZE;
   return {
     id: profileId(normalizedVersion, normalizedEccLevel),

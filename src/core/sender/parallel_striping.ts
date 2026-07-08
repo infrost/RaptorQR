@@ -1,4 +1,4 @@
-export type ParallelQRCount = 1 | 2 | 4;
+export type ParallelQRCount = 1 | 2 | 4 | 6 | 8;
 
 export function stripedFrameCount(packetCount: number, parallelCount: ParallelQRCount): number {
   if (!Number.isInteger(packetCount) || packetCount < 0) {

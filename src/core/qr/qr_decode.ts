@@ -39,6 +39,7 @@ const READER_OPTIONS: ReaderOptions = {
 };
 
 const DEFAULT_MAX_QR_SYMBOLS = 4;
+const MAX_QR_SYMBOLS = 8;
 const SINGLE_QR_DECODE_OPTIONS: Required<QrDecodeOptions> = {
   ...DEFAULT_DECODE_SETTINGS,
   ...DECODE_PRESETS.robust,
@@ -170,7 +171,7 @@ function parseQRVersion(version: string, extra: string): number {
 
 function clampMaxSymbols(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_MAX_QR_SYMBOLS;
-  return Math.min(DEFAULT_MAX_QR_SYMBOLS, Math.max(1, Math.round(value)));
+  return Math.min(MAX_QR_SYMBOLS, Math.max(1, Math.round(value)));
 }
 
 function normalizeDecodeOptions(options: number | QrDecodeOptions): Required<QrDecodeOptions> {
