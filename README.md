@@ -1,10 +1,12 @@
 # RaptorQR
 
-Transfer files and text between devices by displaying high-throughput animated QR codes and reading them with a camera.
+**The world's fastest** files and texts transfer between devices by displaying high-throughput animated QR codes and reading them with a camera.
 
 Everything runs locally in the browser or terminal: no upload server, no Bluetooth, no cable.
 
 RaptorQR started from an earlier open-source QR streaming prototype and has since become a substantial rewrite of the core transfer pipeline and user experience: FEC, QR rendering, worker scheduling, scanner integration, sender/receiver UI, CLI packaging, and the repo layout have all been rebuilt around a higher-throughput, production-ready architecture.
+
+<img width="221" height="480" alt="raptorQR" src="https://github.com/user-attachments/assets/e4a5f6f5-5fe8-4953-931a-a86a509b52e5" />
 
 Live demo: https://qr.linkto.host/
 
@@ -201,6 +203,7 @@ RaptorQR stands on the shoulders of excellent open-source projects and developer
 
 ### Open-source projects used
 
+* [hermitm0nk/qr-stream](https://github.com/hermitm0nk/qr-stream) — The Project orginally being inspired
 * [cberner/raptorq](https://github.com/cberner/raptorq) — RaptorQ / RFC 6330 fountain-code implementation used by the WASM FEC codec.
 * [erwanvivien/fast_qr](https://github.com/erwanvivien/fast_qr) — high-speed QR code rendering library compiled to WASM.
 * [Sec-ant/zxing-wasm](https://github.com/Sec-ant/zxing-wasm) — ZXing-C++ WebAssembly build used for QR/barcode scanning.
@@ -210,6 +213,7 @@ RaptorQR stands on the shoulders of excellent open-source projects and developer
 * [Vite](https://vite.dev/) — frontend build tool and development server.
 * [pnpm](https://pnpm.io/) — package manager used for the monorepo workspace.
 
-### Community
+### Community (Where this project is being discussed)
 
-* [LINUX DO](https://linux.do/) — a friendly developer community.
+* [LINUX DO](https://linux.do/t/topic/2549646)
+* [Appinn](https://meta.appinn.net/t/topic/87996/6)
