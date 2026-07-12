@@ -228,6 +228,7 @@ export function ReceiverPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const animRef = useRef<number>(0);
   const scanningRef = useRef(false);
+  const captureSizeRef = useRef({ width: 0, height: 0 });
 
   const [inputMode, setInputMode] = useState<InputMode>('camera');
   const [scanning, setScanning] = useState(false);
@@ -663,13 +664,20 @@ export function ReceiverPage() {
       ch = Math.min(vh, maxCanvas);
       cw = Math.round(ch * aspect);
     }
-    canvas.width = cw;
-    canvas.height = ch;
+    if (captureSizeRef.current.width !== cw || captureSizeRef.current.height !== ch) {
+      canvas.width = cw;
+      canvas.height = ch;
+      captureSizeRef.current = { width: cw, height: ch };
+    }
 
     ctx.drawImage(video, 0, 0, vw, vh, 0, 0, cw, ch);
     const imageData = ctx.getImageData(0, 0, cw, ch);
+    const pixels = imageData.data.buffer as ArrayBuffer;
 
-    worker.postMessage({ type: 'frame', imageData, realtime: true });
+    worker.postMessage(
+      { type: 'frame', pixels, width: cw, height: ch, realtime: true },
+      [pixels],
+    );
   }, []);
 
   // ── Download recovered file ──────────────────────────────────────────────
