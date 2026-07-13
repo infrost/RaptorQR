@@ -48,13 +48,17 @@ The current RaptorQ WASM path is intended to be production-ready for local offli
 
 ## Packages
 
-```text
-packages/raptorqr-core   protocol, packetization, FEC, QR encode/decode APIs
-packages/raptorqr-fast-qr-wasm   fast_qr WASM renderer artifacts plus Colab script
-packages/raptorqr-raptorq-wasm   RaptorQ WASM codec artifacts plus Colab script
-packages/raptorqr-cli    raptorqr terminal CLI
-apps/web                 Preact/Vite web app
-```
+| Package | Install | Usage |
+| --- | --- | --- |
+| `@raptorqr/core` | `pnpm add @raptorqr/core` | [Packetize, schedule, render, and decode](packages/raptorqr-core/README.md#send-with-raptorq) |
+| `@raptorqr/cli` | `pnpm add --global @raptorqr/cli` | [Terminal sender and local web server](packages/raptorqr-cli/README.md#usage) |
+| `@raptorqr/fast-qr-wasm` | `pnpm add @raptorqr/fast-qr-wasm` | [Render QR codes as RGBA or matrices](packages/raptorqr-fast-qr-wasm/README.md#render-rgba) |
+| `@raptorqr/raptorq-wasm` | `pnpm add @raptorqr/raptorq-wasm` | [Low-level RaptorQ encode and decode](packages/raptorqr-raptorq-wasm/README.md#encode-and-decode) |
+
+Most applications should install `@raptorqr/core`; it already uses the two
+WASM packages internally. Install the WASM packages directly only for
+low-level codec or renderer integration. The non-published Preact/Vite web app
+lives in `apps/web`.
 
 ## Features
 
