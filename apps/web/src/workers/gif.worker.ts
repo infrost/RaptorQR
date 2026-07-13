@@ -55,7 +55,7 @@ self.onmessage = (e: MessageEvent<GenerateInput>) => {
   void (async () => {
     try {
       const result = await handleGenerate(msg);
-      self.postMessage(result, [result.gifData]);
+      self.postMessage(result, { transfer: [result.gifData] });
     } catch (err: any) {
       self.postMessage({ type: 'error', message: err.message ?? String(err) } satisfies ErrorOutput);
     }
