@@ -780,7 +780,7 @@ export function SenderPage() {
     if (mode === 'text') {
       const trimmed = text.trim();
       if (!trimmed) { setError('Please enter some text.'); return; }
-      data = new TextEncoder().encode(trimmed).buffer;
+      data = new TextEncoder().encode(trimmed).buffer as ArrayBuffer;
       isText = true;
     } else {
       if (!file) { setError('Please select a file.'); return; }
@@ -798,11 +798,12 @@ export function SenderPage() {
     let encodeWorker: Worker | null = null;
 
     try {
-      encodeWorker = new Worker(
+      const worker = new Worker(
         new URL('@/workers/encode.worker.ts', import.meta.url),
         { type: 'module' },
       );
-      encodeWorkerRef.current = encodeWorker;
+      encodeWorker = worker;
+      encodeWorkerRef.current = worker;
 
       const encoded = await new Promise<{
         packets: Uint8Array[];
@@ -812,7 +813,7 @@ export function SenderPage() {
         stats: { originalSize: number; preprocessedSize: number; frameCount: number };
       }>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Encode worker timed out')), 120_000);
-        encodeWorker.onmessage = (e: MessageEvent) => {
+        worker.onmessage = (e: MessageEvent) => {
           clearTimeout(timeout);
           if (e.data.type === 'encoded') {
             resolve(e.data);
@@ -820,8 +821,8 @@ export function SenderPage() {
             reject(new Error(e.data.message));
           }
         };
-        encodeWorker.onerror = (err) => { clearTimeout(timeout); reject(err); };
-        encodeWorker.postMessage(
+        worker.onerror = (err) => { clearTimeout(timeout); reject(err); };
+        worker.postMessage(
           {
             type: 'encode',
             data,
@@ -911,15 +912,16 @@ export function SenderPage() {
     try {
       const outputFrameRateFps = frameRateFpsRef.current;
       const outputFrameDelayMs = Math.round(frameRateToDelayMs(outputFrameRateFps));
-      gifWorker = new Worker(
+      const worker = new Worker(
         new URL('@/workers/gif.worker.ts', import.meta.url),
         { type: 'module' },
       );
-      gifWorkerRef.current = gifWorker;
+      gifWorker = worker;
+      gifWorkerRef.current = worker;
 
       const gif = await new Promise<GifResult>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('GIF worker timed out')), 120_000);
-        gifWorker.onmessage = (e: MessageEvent) => {
+        worker.onmessage = (e: MessageEvent) => {
           clearTimeout(timeout);
           if (e.data.type === 'gifReady') {
             resolve({
@@ -935,8 +937,8 @@ export function SenderPage() {
             reject(new Error(e.data.message));
           }
         };
-        gifWorker.onerror = (err) => { clearTimeout(timeout); reject(err); };
-        gifWorker.postMessage(
+        worker.onerror = (err) => { clearTimeout(timeout); reject(err); };
+        worker.postMessage(
           {
             type: 'generate',
             packets: transfer.packets,
@@ -1558,7 +1560,12 @@ function trimFrameCache(
 ): void {
   if (transfer) {
     const renderWindowFrames = getRenderWindowDisplayFrames(transfer, cache);
-    pruneFrameCacheForPlaybackWindow(cache, transfer, startFrameIndex, renderWindowFrames);
+    const windowPacketIndexes = new Set(getPlaybackWindowPacketIndexes(
+      transfer,
+      startFrameIndex,
+      renderWindowFrames,
+    ));
+    pruneFrameCacheForPlaybackWindow(cache, windowPacketIndexes);
   }
 
   while (cache.frames.size > cache.maxEntries) {

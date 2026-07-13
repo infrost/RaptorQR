@@ -1,3 +1,6 @@
+[![npm](https://img.shields.io/npm/v/@raptorqr/core?label=npm)](https://www.npmjs.com/package/@raptorqr/core)
+[![license](https://img.shields.io/npm/l/@raptorqr/core)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live-Demo-2ea44f)](https://qr.linkto.host/)
 # RaptorQR
 
 **The world's fastest** files and texts transfer between devices by displaying high-throughput animated QR codes and reading them with a camera.
@@ -48,12 +51,12 @@ The current RaptorQ WASM path is intended to be production-ready for local offli
 
 ## Packages
 
-| Package | Install | Usage |
-| --- | --- | --- |
-| `@raptorqr/core` | `pnpm add @raptorqr/core` | [Packetize, schedule, render, and decode](packages/raptorqr-core/README.md#send-with-raptorq) |
-| `@raptorqr/cli` | `pnpm add --global @raptorqr/cli` | [Terminal sender and local web server](packages/raptorqr-cli/README.md#usage) |
-| `@raptorqr/fast-qr-wasm` | `pnpm add @raptorqr/fast-qr-wasm` | [Render QR codes as RGBA or matrices](packages/raptorqr-fast-qr-wasm/README.md#render-rgba) |
-| `@raptorqr/raptorq-wasm` | `pnpm add @raptorqr/raptorq-wasm` | [Low-level RaptorQ encode and decode](packages/raptorqr-raptorq-wasm/README.md#encode-and-decode) |
+| Package | Version | Install | Usage |
+| --- | --- | --- | --- |
+| `@raptorqr/core` | [![npm](https://img.shields.io/npm/v/@raptorqr/core)](https://www.npmjs.com/package/@raptorqr/core) | `pnpm add @raptorqr/core` | [Packetize, schedule, render, and decode](packages/raptorqr-core/README.md#send-with-raptorq) |
+| `@raptorqr/cli` | [![npm](https://img.shields.io/npm/v/@raptorqr/cli)](https://www.npmjs.com/package/@raptorqr/cli) | `pnpm add --global @raptorqr/cli` | [Terminal sender and local web server](packages/raptorqr-cli/README.md#usage) |
+| `@raptorqr/fast-qr-wasm` | [![npm](https://img.shields.io/npm/v/@raptorqr/fast-qr-wasm)](https://www.npmjs.com/package/@raptorqr/fast-qr-wasm) | `pnpm add @raptorqr/fast-qr-wasm` | [Render QR codes as RGBA or matrices](packages/raptorqr-fast-qr-wasm/README.md#render-rgba) |
+| `@raptorqr/raptorq-wasm` | [![npm](https://img.shields.io/npm/v/@raptorqr/raptorq-wasm)](https://www.npmjs.com/package/@raptorqr/raptorq-wasm) | `pnpm add @raptorqr/raptorq-wasm` | [Low-level RaptorQ encode and decode](packages/raptorqr-raptorq-wasm/README.md#encode-and-decode) |
 
 Most applications should install `@raptorqr/core`; it already uses the two
 WASM packages internally. Install the WASM packages directly only for

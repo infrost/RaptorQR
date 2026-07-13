@@ -77,7 +77,7 @@ Object.defineProperty(WebAssembly, 'instantiateStreaming', {
   value: undefined,
 });
 
-globalThis.fetch = async (input, init) => {
+globalThis.fetch = (async (input, init) => {
   const url = typeof input === 'string' || input instanceof URL
     ? String(input)
     : input.url;
@@ -106,7 +106,7 @@ globalThis.fetch = async (input, init) => {
     throw new Error(`Unexpected fetch in test: ${url}`);
   }
   return originalFetch(input, init);
-};
+}) as typeof globalThis.fetch;
 
 function findRepoRoot(startDir: string): string {
   let dir = resolve(startDir);
