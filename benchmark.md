@@ -22,6 +22,7 @@ The final benchmark is implemented in `benchmark.final.test.ts` and exercises
 the end-to-end transfer stack:
 
 - RaptorQ packetization through `@raptorqr/raptorq-wasm`
+- default Balanced loop ordering with repair packets evenly interleaved
 - QR rendering through `@raptorqr/fast-qr-wasm`
 - 4 QR symbols per display frame in a 2x2 composite image
 - QR parsing through `decodeQRCodesFromCanvas`

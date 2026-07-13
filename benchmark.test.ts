@@ -50,6 +50,7 @@ import type { Packet as ParsedPacket } from '@raptorqr/core/protocol/packet';
 import { decodeQRFromCanvas } from '@raptorqr/core/qr/qr_decode';
 import { renderQRCodeImageData } from '@raptorqr/core/qr/qr_encoder_browser';
 import { packetizeRaptorQ } from '@raptorqr/core/sender/raptorq_packetizer';
+import { createRaptorQPlaybackOrders } from '@raptorqr/core/sender/raptorq_playback';
 
 interface BenchConfig {
   payloadBytes: number;
@@ -212,7 +213,13 @@ async function runFullChainOnce(iteration: number, payload: Uint8Array, config: 
       repairPercent: DEFAULT_RAPTORQ_REPAIR_PERCENT,
     },
   ));
-  const parsedOriginalPackets = packetized.packets.map((packet) => parsePacket(packet));
+  const { loopOrder } = createRaptorQPlaybackOrders(
+    packetized.sourcePacketIndices,
+    packetized.repairPacketIndices,
+    'balanced',
+  );
+  const scheduledPackets = loopOrder.map((packetIndex) => packetized.packets[packetIndex]!);
+  const parsedOriginalPackets = scheduledPackets.map((packet) => parsePacket(packet));
 
   expect(packetized.dataLength).toBe(payload.length);
   expect(packetized.symbolSize).toBe(MAX_PAYLOAD_SIZE);
@@ -220,7 +227,7 @@ async function runFullChainOnce(iteration: number, payload: Uint8Array, config: 
   expect(parsedOriginalPackets.every((packet) => packetCodec(packet.header) === 'wasm-raptorq')).toBe(true);
   expect(parsedOriginalPackets.every((packet) => packet.header.symbolIndex === RAPTORQ_SYMBOL_INDEX)).toBe(true);
 
-  const [images, qrRenderMs] = await timed(() => renderFrames(packetized.packets, config.scale));
+  const [images, qrRenderMs] = await timed(() => renderFrames(scheduledPackets, config.scale));
   const [decodedPackets, qrDecodeMs] = await timed(() => decodeFrames(images));
 
   expect(decodedPackets).toHaveLength(parsedOriginalPackets.length);

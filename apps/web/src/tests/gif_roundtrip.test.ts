@@ -11,6 +11,7 @@ import { decodeQRFromCanvas } from '@raptorqr/core/qr/qr_decode';
 import { parsePacket } from '@raptorqr/core/protocol/packet';
 import { MAX_PAYLOAD_SIZE, QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@raptorqr/core/protocol/constants';
 import { packetizeRaptorQ } from '@raptorqr/core/sender/raptorq_packetizer';
+import { createRaptorQPlaybackOrders } from '@raptorqr/core/sender/raptorq_playback';
 
 describe('GIF Roundtrip', () => {
   it('should encode and decode a GIF', async () => {
@@ -26,7 +27,13 @@ describe('GIF Roundtrip', () => {
         repairPercent: DEFAULT_RAPTORQ_REPAIR_PERCENT,
       },
     );
-    const frames = result.packets;
+    const { loopOrder } = createRaptorQPlaybackOrders(
+      result.sourcePacketIndices,
+      result.repairPacketIndices,
+      'balanced',
+    );
+    const frames = loopOrder.map((packetIndex) => result.packets[packetIndex]!);
+    expect(loopOrder).toHaveLength(result.packets.length);
 
     // Generate QR image frames
     const imageFrames: Uint8Array[] = [];

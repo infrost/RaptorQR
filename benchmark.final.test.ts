@@ -35,6 +35,7 @@ import { packetCodec, parsePacket } from '@raptorqr/core/protocol/packet';
 import { decodeQRCodesFromCanvas } from '@raptorqr/core/qr/qr_decode';
 import { renderQRCodeImageData } from '@raptorqr/core/qr/qr_encoder_browser';
 import { packetizeRaptorQ } from '@raptorqr/core/sender/raptorq_packetizer';
+import { createRaptorQPlaybackOrders } from '@raptorqr/core/sender/raptorq_playback';
 
 const QR_VERSION = 30;
 const ECC_LEVEL = 'L';
@@ -161,6 +162,11 @@ describe('final V30 4-way transfer benchmark', () => {
     expect(packetized.packets).toHaveLength(TOTAL_QR_SYMBOLS);
     expect(packetized.symbolSize).toBe(profile.maxPayloadSize);
     expect(packetized.dataLength).toBe(payload.length);
+    const { loopOrder } = createRaptorQPlaybackOrders(
+      packetized.sourcePacketIndices,
+      packetized.repairPacketIndices,
+      'balanced',
+    );
 
     const decoder = await RaptorQWasmDecoder.create(packetized.dataLength, profile.maxPayloadSize);
     const seenPayloadIds = new Set<string>();
@@ -182,7 +188,7 @@ describe('final V30 4-way transfer benchmark', () => {
         const symbolIndex = displayFrame * PARALLEL_QR_COUNT + tileIndex;
         if (dropSet.has(symbolIndex)) continue;
 
-        const packet = packetized.packets[symbolIndex]!;
+        const packet = packetized.packets[loopOrder[symbolIndex]!]!;
         const qrImage = await renderQRCodeImageData(
           packet,
           QR_VERSION,

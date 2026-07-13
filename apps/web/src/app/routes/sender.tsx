@@ -35,6 +35,17 @@ import {
   normalizeRaptorQRepairPercent,
   type FecCodec,
 } from '@raptorqr/core/fec/codec';
+import {
+  DEFAULT_RAPTORQ_PLAYBACK_STRATEGY,
+  RAPTORQ_PLAYBACK_STRATEGIES,
+  createRaptorQPlaybackOrders,
+  formatRaptorQPlaybackStrategy,
+  getRaptorQPlaybackWindowPacketIndices,
+  normalizeRaptorQPlaybackStrategy,
+  type RaptorQPlaybackOrders,
+  type RaptorQPlaybackPhase,
+  type RaptorQPlaybackStrategy,
+} from '@raptorqr/core/sender/raptorq_playback';
 import { QrWorkerPool } from '@/lib/qr_worker_pool';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -53,6 +64,9 @@ interface GifResult {
 
 interface LiveTransfer {
   packets: Uint8Array[];
+  initialOrder: number[];
+  loopOrder: number[];
+  activeOrder: RaptorQPlaybackPhase;
   width: number;
   height: number;
   tileWidth: number;
@@ -270,6 +284,9 @@ export function SenderPage() {
   const [qrEncoder, setQrEncoder] = useState<QREncoder>(DEFAULT_QR_ENCODER);
   const [fecCodec, setFecCodec] = useState<FecCodec>(DEFAULT_FEC_CODEC);
   const [raptorqRepairPercent, setRaptorqRepairPercent] = useState(DEFAULT_RAPTORQ_REPAIR_PERCENT);
+  const [raptorqPlaybackStrategy, setRaptorqPlaybackStrategy] = useState<RaptorQPlaybackStrategy>(
+    DEFAULT_RAPTORQ_PLAYBACK_STRATEGY,
+  );
   const [advancedGenerateOpen, setAdvancedGenerateOpen] = useState(false);
   const [frameRateFps, setFrameRateFps] = useState(DEFAULT_FRAME_RATE_FPS);
   const [actualLiveFps, setActualLiveFps] = useState(0);
@@ -286,6 +303,7 @@ export function SenderPage() {
     qrEncoder: QREncoder;
     fecCodec: FecCodec;
     raptorqRepairPercent: number;
+    raptorqPlaybackStrategy: RaptorQPlaybackStrategy | null;
   } | null>(null);
   const [error, setError] = useState('');
   const [fullscreenActive, setFullscreenActive] = useState(false);
@@ -382,19 +400,21 @@ export function SenderPage() {
 
     const renderWindowFrames = getRenderWindowDisplayFrames(transfer, frameCacheRef.current);
     const maxOutstandingPackets = getMaxOutstandingRenderPackets(transfer, frameCacheRef.current);
-
-    pruneFrameCacheForPlaybackWindow(
-      frameCacheRef.current,
+    const windowPacketIndexes = getPlaybackWindowPacketIndexes(
       transfer,
       startFrameIndex,
       renderWindowFrames,
     );
+    const windowPacketIndexSet = new Set(windowPacketIndexes);
+
+    pruneFrameCacheForPlaybackWindow(
+      frameCacheRef.current,
+      windowPacketIndexSet,
+    );
 
     pruneRequestedPacketsForPlaybackWindow(
       requestedPacketImagesRef.current,
-      transfer,
-      startFrameIndex,
-      renderWindowFrames,
+      windowPacketIndexSet,
     );
 
     let availableSlots = maxOutstandingPackets
@@ -404,34 +424,15 @@ export function SenderPage() {
     if (availableSlots <= 0) return;
 
     const missingPacketIndexes: number[] = [];
-    const endFrameIndex = startFrameIndex + renderWindowFrames;
+    for (const packetIndex of windowPacketIndexes) {
+      if (frameCacheRef.current.frames.has(packetIndex)) continue;
+      if (requestedPacketImagesRef.current.has(packetIndex)) continue;
 
-    for (let frameIndex = startFrameIndex; frameIndex < endFrameIndex; frameIndex++) {
-      const normalizedFrameIndex = frameIndex % transfer.displayFrameCount;
+      requestedPacketImagesRef.current.add(packetIndex);
+      missingPacketIndexes.push(packetIndex);
+      availableSlots--;
 
-      for (let tileIndex = 0; tileIndex < transfer.parallelCount; tileIndex++) {
-        const packetIndex = getPacketIndexForDisplayFrame(
-          transfer,
-          normalizedFrameIndex,
-          tileIndex,
-        );
-
-        if (packetIndex === null) continue;
-        if (frameCacheRef.current.frames.has(packetIndex)) continue;
-        if (requestedPacketImagesRef.current.has(packetIndex)) continue;
-
-        requestedPacketImagesRef.current.add(packetIndex);
-        missingPacketIndexes.push(packetIndex);
-        availableSlots--;
-
-        if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
-          break;
-        }
-      }
-
-      if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) {
-        break;
-      }
+      if (missingPacketIndexes.length >= QR_RENDER_BATCH_LIMIT || availableSlots <= 0) break;
     }
 
     if (missingPacketIndexes.length === 0) return;
@@ -469,13 +470,13 @@ export function SenderPage() {
             activeTransfer,
             frameCacheRef.current,
           );
-
-          if (!isPacketInPlaybackWindow(
+          const activeWindowPackets = new Set(getPlaybackWindowPacketIndexes(
             activeTransfer,
-            packetIndex,
             currentFrameIndex,
             activeRenderWindowFrames,
-          )) {
+          ));
+
+          if (!activeWindowPackets.has(packetIndex)) {
             return;
           }
 
@@ -486,12 +487,12 @@ export function SenderPage() {
             return;
           }
 
-          if (!isPacketInPlaybackWindow(
+          const latestWindowPackets = new Set(getPlaybackWindowPacketIndexes(
             activeTransfer,
-            packetIndex,
             liveFrameIndexRef.current % activeTransfer.displayFrameCount,
             activeRenderWindowFrames,
-          )) {
+          ));
+          if (!latestWindowPackets.has(packetIndex)) {
             closeRenderedTile(renderedTile);
             return;
           }
@@ -567,8 +568,20 @@ export function SenderPage() {
 
       recordLiveFrameDraw();
 
-      requestRenderWindow(transfer, frameIndex + 1);
       liveFrameIndexRef.current = (frameIndex + 1) % transfer.displayFrameCount;
+
+      // Balanced uses a source-first first pass for Live, then switches only
+      // after the final initial display frame was actually drawn. This keeps
+      // the render cache keyed by canonical packet index while the playback
+      // order changes underneath it.
+      if (
+        transfer.activeOrder === 'initial' &&
+        frameIndex === transfer.displayFrameCount - 1
+      ) {
+        transfer.activeOrder = 'loop';
+      }
+
+      requestRenderWindow(transfer, liveFrameIndexRef.current);
       advanced++;
     }
 
@@ -738,6 +751,11 @@ export function SenderPage() {
     resetOutput();
   }, [resetOutput]);
 
+  const handleRaptorQPlaybackStrategyChange = useCallback((value: string) => {
+    setRaptorqPlaybackStrategy(normalizeRaptorQPlaybackStrategy(value));
+    resetOutput();
+  }, [resetOutput]);
+
   const handleFrameRateChange = useCallback((value: string) => {
     const nextFrameRate = clampFrameRate(Number(value));
     frameRateFpsRef.current = nextFrameRate;
@@ -788,6 +806,8 @@ export function SenderPage() {
 
       const encoded = await new Promise<{
         packets: Uint8Array[];
+        sourcePacketIndices?: number[];
+        repairPacketIndices?: number[];
         totalGenerations: number;
         stats: { originalSize: number; preprocessedSize: number; frameCount: number };
       }>((resolve, reject) => {
@@ -827,12 +847,18 @@ export function SenderPage() {
         qrEncoder,
         fecCodec,
         raptorqRepairPercent,
+        raptorqPlaybackStrategy: fecCodec === 'wasm-raptorq'
+          ? raptorqPlaybackStrategy
+          : null,
       });
       const nextLiveTransfer = createLiveTransfer(
         encoded.packets,
         selectedQRProfile,
         qrEncoder,
         parallelQRCount,
+        fecCodec === 'wasm-raptorq' ? raptorqPlaybackStrategy : null,
+        encoded.sourcePacketIndices,
+        encoded.repairPacketIndices,
       );
       setLiveTransfer(nextLiveTransfer);
       setStatus(
@@ -853,7 +879,19 @@ export function SenderPage() {
         setEncodingLive(false);
       }
     }
-  }, [mode, text, file, resetOutput, qrVersion, eccLevel, qrEncoder, fecCodec, raptorqRepairPercent, parallelQRCount]);
+  }, [
+    mode,
+    text,
+    file,
+    resetOutput,
+    qrVersion,
+    eccLevel,
+    qrEncoder,
+    fecCodec,
+    raptorqRepairPercent,
+    raptorqPlaybackStrategy,
+    parallelQRCount,
+  ]);
 
   const handlePrepareGif = useCallback(async () => {
     const transfer = liveTransferRef.current;
@@ -907,6 +945,7 @@ export function SenderPage() {
             eccLevel: transfer.eccLevel,
             qrEncoder: transfer.qrEncoder,
             parallelCount: transfer.parallelCount,
+            packetOrder: transfer.loopOrder,
           },
         );
       });
@@ -1103,26 +1142,46 @@ export function SenderPage() {
                 </select>
               </label>
               {fecCodec === 'wasm-raptorq' && (
-                <label>
-                  <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={S.label}>RaptorQ repair</span>
-                    <span style={S.infoValue}>{raptorqRepairPercent}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={MIN_RAPTORQ_REPAIR_PERCENT}
-                    max={MAX_RAPTORQ_REPAIR_PERCENT}
-                    step={1}
-                    value={raptorqRepairPercent}
-                    style={S.slider}
-                    disabled={encodingLive}
-                    onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
-                  />
-                  <div style={S.sliderLabels}>
-                    <span>Less QR</span>
-                    <span>More repair</span>
-                  </div>
-                </label>
+                <>
+                  <label>
+                    <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span style={S.label}>RaptorQ repair</span>
+                      <span style={S.infoValue}>{raptorqRepairPercent}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={MIN_RAPTORQ_REPAIR_PERCENT}
+                      max={MAX_RAPTORQ_REPAIR_PERCENT}
+                      step={1}
+                      value={raptorqRepairPercent}
+                      style={S.slider}
+                      disabled={encodingLive || liveTransfer !== null}
+                      onInput={(e) => handleRaptorQRepairPercentChange((e.target as HTMLInputElement).value)}
+                    />
+                    <div style={S.sliderLabels}>
+                      <span>Less QR</span>
+                      <span>More repair</span>
+                    </div>
+                  </label>
+                  <label>
+                    <div style={{ ...S.row, justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span style={S.label}>RaptorQ playback</span>
+                      <span style={S.infoValue}>{formatRaptorQPlaybackStrategy(raptorqPlaybackStrategy)}</span>
+                    </div>
+                    <select
+                      value={raptorqPlaybackStrategy}
+                      style={S.select}
+                      disabled={encodingLive || liveTransfer !== null}
+                      onChange={(e) => handleRaptorQPlaybackStrategyChange((e.target as HTMLSelectElement).value)}
+                    >
+                      {RAPTORQ_PLAYBACK_STRATEGIES.map((strategy) => (
+                        <option key={strategy} value={strategy}>
+                          {formatRaptorQPlaybackStrategy(strategy)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
               )}
             </div>
           )}
@@ -1260,6 +1319,12 @@ export function SenderPage() {
                 ? `${formatFecCodec(stats.fecCodec)} · ${stats.raptorqRepairPercent}% repair`
                 : formatFecCodec(stats.fecCodec)}
             </span>
+            <span style={S.infoLabel}>RaptorQ playback</span>
+            <span style={S.infoValue}>
+              {stats.raptorqPlaybackStrategy
+                ? formatRaptorQPlaybackStrategy(stats.raptorqPlaybackStrategy)
+                : 'Not applicable (JS RLNC)'}
+            </span>
             <span style={S.infoLabel}>QR packets</span>
             <span style={S.infoValue}>{stats.frameCount}</span>
             <span style={S.infoLabel}>Parallel QR</span>
@@ -1394,6 +1459,9 @@ function createLiveTransfer(
   profile: QRTransferProfile,
   qrEncoder: QREncoder,
   parallelCount: ParallelQRCount,
+  raptorqStrategy: RaptorQPlaybackStrategy | null,
+  sourcePacketIndices?: number[],
+  repairPacketIndices?: number[],
 ): LiveTransfer {
   if (packets.length === 0) {
     throw new Error('No QR packets were generated.');
@@ -1404,9 +1472,28 @@ function createLiveTransfer(
   const scale = Math.max(2, Math.round(LIVE_TARGET_PX / totalModules));
   const tileSize = totalModules * scale;
   const layout = getParallelLayout(parallelCount);
+  const packetIndexes = Array.from({ length: packets.length }, (_, index) => index);
+  let playbackOrders: RaptorQPlaybackOrders;
+  if (raptorqStrategy) {
+    if (!sourcePacketIndices || !repairPacketIndices) {
+      throw new Error('RaptorQ packet classification metadata is missing.');
+    }
+    playbackOrders = createRaptorQPlaybackOrders(
+      sourcePacketIndices,
+      repairPacketIndices,
+      raptorqStrategy,
+    );
+  } else {
+    playbackOrders = {
+      initialOrder: packetIndexes,
+      loopOrder: packetIndexes,
+    };
+  }
 
   return {
     packets,
+    ...playbackOrders,
+    activeOrder: 'initial',
     width: tileSize * layout.columns,
     height: tileSize * layout.rows,
     tileWidth: tileSize,
@@ -1498,16 +1585,10 @@ function getMaxOutstandingRenderPackets(transfer: LiveTransfer, cache: FrameCach
 
 function pruneFrameCacheForPlaybackWindow(
   cache: FrameCache,
-  transfer: LiveTransfer,
-  startFrameIndex: number,
-  renderWindowFrames = getRenderWindowDisplayFrames(transfer, cache),
+  windowPacketIndexes: ReadonlySet<number>,
 ): void {
-  if (transfer.displayFrameCount <= renderWindowFrames) return;
-
   for (const [packetIndex, tile] of cache.frames) {
-    if (isPacketInPlaybackWindow(transfer, packetIndex, startFrameIndex, renderWindowFrames)) {
-      continue;
-    }
+    if (windowPacketIndexes.has(packetIndex)) continue;
     closeRenderedTile(tile);
     cache.frames.delete(packetIndex);
   }
@@ -1515,41 +1596,26 @@ function pruneFrameCacheForPlaybackWindow(
 
 function pruneRequestedPacketsForPlaybackWindow(
   requestedPackets: Set<number>,
-  transfer: LiveTransfer,
-  startFrameIndex: number,
-  renderWindowFrames: number,
+  windowPacketIndexes: ReadonlySet<number>,
 ): void {
-  if (transfer.displayFrameCount <= renderWindowFrames) return;
-
   for (const packetIndex of requestedPackets) {
-    if (isPacketInPlaybackWindow(transfer, packetIndex, startFrameIndex, renderWindowFrames)) {
-      continue;
-    }
+    if (windowPacketIndexes.has(packetIndex)) continue;
     requestedPackets.delete(packetIndex);
   }
 }
 
-function isPacketInPlaybackWindow(
+function getPlaybackWindowPacketIndexes(
   transfer: LiveTransfer,
-  packetIndex: number,
   startFrameIndex: number,
   renderWindowFrames: number,
-): boolean {
-  if (packetIndex < 0 || packetIndex >= transfer.packets.length) return false;
-  if (transfer.displayFrameCount <= renderWindowFrames) return true;
-
-  const packetFrameIndex = Math.floor(packetIndex / transfer.parallelCount);
-  const normalizedStartFrame = normalizeFrameIndex(startFrameIndex, transfer.displayFrameCount);
-  const distance = (
-    packetFrameIndex
-    - normalizedStartFrame
-    + transfer.displayFrameCount
-  ) % transfer.displayFrameCount;
-  return distance < renderWindowFrames;
-}
-
-function normalizeFrameIndex(frameIndex: number, frameCount: number): number {
-  return ((frameIndex % frameCount) + frameCount) % frameCount;
+): number[] {
+  return getRaptorQPlaybackWindowPacketIndices(
+    transfer,
+    transfer.activeOrder,
+    transfer.parallelCount,
+    startFrameIndex,
+    Math.min(renderWindowFrames, transfer.displayFrameCount),
+  );
 }
 
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {
@@ -1565,10 +1631,16 @@ function getPacketIndexForDisplayFrame(
   frameIndex: number,
   tileIndex: number,
 ): number | null {
-  return stripedPacketIndex(
-    transfer.packets.length,
+  const orderedPosition = stripedPacketIndex(
+    transfer.initialOrder.length,
     transfer.parallelCount,
     frameIndex,
     tileIndex,
   );
+  if (orderedPosition === null) return null;
+
+  const order = transfer.activeOrder === 'initial'
+    ? transfer.initialOrder
+    : transfer.loopOrder;
+  return order[orderedPosition] ?? null;
 }

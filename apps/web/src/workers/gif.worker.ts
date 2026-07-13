@@ -15,7 +15,7 @@ import { createQRGif } from '@raptorqr/core/gif/gif_render';
 import { QR_VERSION, ECC_LEVEL, FRAME_DELAY_MS } from '@raptorqr/core/protocol/constants';
 import {
   stripedFrameCount,
-  stripedPacketIndex,
+  stripedOrderedPacketIndex,
   type ParallelQRCount,
 } from '@raptorqr/core/sender/parallel_striping';
 
@@ -24,6 +24,8 @@ import {
 interface GenerateInput {
   type: 'generate';
   packets: Uint8Array[];
+  /** Canonical packet indexes in playback order. */
+  packetOrder?: number[];
   frameDelayMs?: number;
   qrVersion?: number;
   eccLevel?: EccLevel;
@@ -62,6 +64,7 @@ self.onmessage = (e: MessageEvent<GenerateInput>) => {
 
 async function handleGenerate(input: GenerateInput): Promise<GifOutput> {
   const { packets } = input;
+  const packetOrder = normalizePacketOrder(input.packetOrder, packets.length);
   const frameDelayMs = normalizeFrameDelayMs(input.frameDelayMs);
   const qrVersion = normalizeQRVersion(input.qrVersion);
   const eccLevel = normalizeEccLevel(input.eccLevel);
@@ -82,14 +85,14 @@ async function handleGenerate(input: GenerateInput): Promise<GifOutput> {
   const frames: Uint8Array[] = [];
   const width = tileSize * layout.columns;
   const height = tileSize * layout.rows;
-  const frameCount = stripedFrameCount(packets.length, parallelCount);
+  const frameCount = stripedFrameCount(packetOrder.length, parallelCount);
 
   for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
     const composite = new Uint8ClampedArray(width * height * 4);
     composite.fill(255);
 
     for (let tileIndex = 0; tileIndex < parallelCount; tileIndex++) {
-      const packetIndex = stripedPacketIndex(packets.length, parallelCount, frameIndex, tileIndex);
+      const packetIndex = stripedOrderedPacketIndex(packetOrder, parallelCount, frameIndex, tileIndex);
       if (packetIndex === null) continue;
       const imageData = await renderQRCodeImageData(
         packets[packetIndex]!,
@@ -137,6 +140,25 @@ function normalizeEccLevel(value: EccLevel | undefined): EccLevel {
 
 function normalizeParallelQRCount(value: number | undefined): ParallelQRCount {
   return value === 1 || value === 2 || value === 4 || value === 6 || value === 8 ? value : 4;
+}
+
+function normalizePacketOrder(order: number[] | undefined, packetCount: number): number[] {
+  if (!order) return Array.from({ length: packetCount }, (_, index) => index);
+  if (order.length !== packetCount) {
+    throw new RangeError(`Invalid GIF packet order length: ${order.length}, expected ${packetCount}`);
+  }
+
+  const seen = new Set<number>();
+  for (const packetIndex of order) {
+    if (!Number.isInteger(packetIndex) || packetIndex < 0 || packetIndex >= packetCount) {
+      throw new RangeError(`Invalid GIF packet index: ${packetIndex}`);
+    }
+    if (seen.has(packetIndex)) {
+      throw new RangeError(`Duplicate GIF packet index: ${packetIndex}`);
+    }
+    seen.add(packetIndex);
+  }
+  return order;
 }
 
 function getParallelLayout(parallelCount: ParallelQRCount): { columns: number; rows: number } {

@@ -12,3 +12,4 @@ export * from './sender/legacy_rlnc';
 export * from './sender/parallel_striping';
 export * from './sender/preprocess_payload';
 export * from './sender/raptorq_packetizer';
+export * from './sender/raptorq_playback';

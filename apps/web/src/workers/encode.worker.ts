@@ -34,6 +34,8 @@ interface EncodeInput {
 interface EncodeOutput {
   type: 'encoded';
   packets: Uint8Array[];
+  sourcePacketIndices?: number[];
+  repairPacketIndices?: number[];
   totalGenerations: number;
   stats: {
     originalSize: number;
@@ -88,6 +90,8 @@ async function handleEncode(input: EncodeInput): Promise<EncodeOutput> {
     return {
       type: 'encoded',
       packets: result.packets,
+      sourcePacketIndices: result.sourcePacketIndices,
+      repairPacketIndices: result.repairPacketIndices,
       totalGenerations: result.totalGenerations,
       stats: {
         originalSize: originalBytes.length,

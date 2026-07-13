@@ -23,3 +23,22 @@ export function stripedPacketIndex(
   const packetIndex = frameIndex * parallelCount + tileIndex;
   return packetIndex < packetCount ? packetIndex : null;
 }
+
+/**
+ * Resolve a display tile through a canonical packet order before striping.
+ * This keeps parallel QR grouping independent from packet classification.
+ */
+export function stripedOrderedPacketIndex(
+  packetOrder: readonly number[],
+  parallelCount: ParallelQRCount,
+  frameIndex: number,
+  tileIndex: number,
+): number | null {
+  const orderedPosition = stripedPacketIndex(
+    packetOrder.length,
+    parallelCount,
+    frameIndex,
+    tileIndex,
+  );
+  return orderedPosition === null ? null : packetOrder[orderedPosition] ?? null;
+}
